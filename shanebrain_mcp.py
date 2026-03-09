@@ -1,26 +1,36 @@
+#!/usr/bin/env python3
 """
-ShaneBrain Core MCP Server v2.0
-================================
-Production-grade MCP server exposing Weaviate RAG, Ollama inference,
-planning system, MongoDB memory, and system health monitoring.
+ShaneBrain MCP Server v2.0
+===========================
+27 tools across 12 groups — merged from Pi deployment + GitHub quality patterns.
 
-Stack: FastMCP + Streamable HTTP | Pi 5 @ /mnt/shanebrain-raid/shanebrain-core/
-Transport: Streamable HTTP (port 8008) — multi-client, Tailscale-accessible
+Groups: Knowledge (2), Chat (3), RAG Chat (1), Social (2), Vault (3),
+        Notes (3), Drafts (2), Security (3), Weaviate Admin (2),
+        Ollama (2), Planning (3), System (1)
+
+Transport: SSE on port 8100 (Docker), switchable to streamable_http via --transport
+Quality:   Pydantic v2 validation, MCP annotations, actionable errors, stderr logging
 """
 
 import json
-import os
 import logging
+import os
 import sys
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from enum import Enum
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import List, Optional
 
-import httpx
-from mcp.server.fastmcp import FastMCP, Context
-from pydantic import BaseModel, Field, ConfigDict, field_validator
+import ollama as ollama_lib
+from mcp.server.fastmcp import FastMCP
+from pydantic import BaseModel, ConfigDict, Field, field_validator
+from starlette.requests import Request
+from starlette.responses import JSONResponse
+from weaviate.classes.query import Filter
+
+from health import check_gateway, check_ollama, check_weaviate
+from weaviate_bridge import DockerWeaviateHelper
 
 # ---------------------------------------------------------------------------
 # Logging — stderr only (never pollute stdout for MCP)
@@ -33,320 +43,753 @@ logging.basicConfig(
 logger = logging.getLogger("shanebrain_mcp")
 
 # ---------------------------------------------------------------------------
-# Constants
+# Config
 # ---------------------------------------------------------------------------
-WEAVIATE_URL   = os.getenv("WEAVIATE_URL",   "http://localhost:8080")
-OLLAMA_URL     = os.getenv("OLLAMA_URL",     "http://localhost:11434")
-MONGO_URL      = os.getenv("MONGO_URL",      "mongodb://localhost:27017")
-PLANNING_DIR   = Path(os.getenv("PLANNING_DIR", "/mnt/shanebrain-raid/shanebrain-core/planning-system"))
-DEFAULT_MODEL  = os.getenv("OLLAMA_DEFAULT_MODEL", "llama3.2:1b")
-MCP_PORT       = int(os.getenv("MCP_PORT", "8008"))
+OLLAMA_HOST = os.environ.get("OLLAMA_HOST", "http://localhost:11434")
+OLLAMA_MODEL = os.environ.get("OLLAMA_MODEL", "shanebrain-3b:latest")
+PLANNING_DIR = Path(os.environ.get("PLANNING_DIR", "/mnt/shanebrain-raid/shanebrain-core/planning-system"))
+MCP_PORT = int(os.environ.get("MCP_PORT", "8100"))
+RAG_CHUNK_LIMIT = 5
 
-WEAVIATE_KNOWLEDGE_CLASS = "SocialKnowledge"
-WEAVIATE_MEMORY_CLASS    = "ConversationMemory"
-WEAVIATE_FRIEND_CLASS    = "FriendProfile"
 
 # ---------------------------------------------------------------------------
-# Response format enum (reused across tools)
+# Shared helpers
 # ---------------------------------------------------------------------------
+
 class ResponseFormat(str, Enum):
     MARKDOWN = "markdown"
-    JSON     = "json"
+    JSON = "json"
 
-# ---------------------------------------------------------------------------
-# Shared HTTP client helpers
-# ---------------------------------------------------------------------------
 
-async def _weaviate_get(path: str, params: Optional[Dict] = None) -> Dict:
-    async with httpx.AsyncClient(timeout=15.0) as client:
-        r = await client.get(f"{WEAVIATE_URL}{path}", params=params)
-        r.raise_for_status()
-        return r.json()
+def _weaviate():
+    """Get a Weaviate helper as a context manager (auto-connects and closes)."""
+    return DockerWeaviateHelper()
 
-async def _weaviate_post(path: str, body: Dict) -> Dict:
-    async with httpx.AsyncClient(timeout=30.0) as client:
-        r = await client.post(
-            f"{WEAVIATE_URL}{path}",
-            json=body,
-            headers={"Content-Type": "application/json"},
-        )
-        r.raise_for_status()
-        return r.json()
 
-async def _weaviate_delete(path: str) -> None:
-    async with httpx.AsyncClient(timeout=15.0) as client:
-        r = await client.delete(f"{WEAVIATE_URL}{path}")
-        r.raise_for_status()
+def _ollama_client():
+    """Get an Ollama client with configured host."""
+    return ollama_lib.Client(host=OLLAMA_HOST, timeout=600)
 
-async def _ollama_post(path: str, body: Dict) -> Dict:
-    async with httpx.AsyncClient(timeout=120.0) as client:
-        r = await client.post(f"{OLLAMA_URL}{path}", json=body)
-        r.raise_for_status()
-        return r.json()
-
-async def _ollama_get(path: str) -> Dict:
-    async with httpx.AsyncClient(timeout=10.0) as client:
-        r = await client.get(f"{OLLAMA_URL}{path}")
-        r.raise_for_status()
-        return r.json()
-
-# ---------------------------------------------------------------------------
-# Error formatting
-# ---------------------------------------------------------------------------
 
 def _format_error(e: Exception, context: str = "") -> str:
+    """Format errors with actionable hints."""
     prefix = f"[{context}] " if context else ""
-    if isinstance(e, httpx.HTTPStatusError):
-        code = e.response.status_code
-        if code == 404:
-            return f"{prefix}Error 404: Resource not found. Check class name or object ID."
-        elif code == 422:
-            return f"{prefix}Error 422: Invalid request body. Check your schema and field names."
-        elif code == 503:
-            return f"{prefix}Error 503: Service unavailable. Is the target service running?"
-        return f"{prefix}Error {code}: {e.response.text[:200]}"
-    elif isinstance(e, httpx.TimeoutException):
-        return f"{prefix}Timeout: Request took too long. Large models or heavy RAG queries may need more time."
-    elif isinstance(e, httpx.ConnectError):
-        return f"{prefix}Connection refused. Verify the service is running: {e}"
-    return f"{prefix}Unexpected error ({type(e).__name__}): {str(e)}"
+    msg = str(e)
+    if "connect" in msg.lower():
+        return f"{prefix}Connection error: {msg}. Is the service running?"
+    if "timeout" in msg.lower():
+        return f"{prefix}Timeout: {msg}. Large model or heavy query — try again."
+    if "not found" in msg.lower() or "404" in msg:
+        return f"{prefix}Not found: {msg}. Check collection/object name."
+    return f"{prefix}{type(e).__name__}: {msg}"
+
+
+def _get_system_prompt():
+    """Build the ShaneBrain system prompt with family info."""
+    sobriety_days = (datetime.now() - datetime(2023, 11, 27)).days
+    sobriety_years = sobriety_days // 365
+    sobriety_months = (sobriety_days % 365) // 30
+
+    return f"""You are ShaneBrain - Shane Brazelton's AI, built to serve his family for generations.
+
+CRITICAL RULES:
+1. BE BRIEF: 2-4 sentences MAX unless asked for more
+2. NEVER HALLUCINATE: If you don't know, say "I don't know that yet"
+3. NO FLUFF: Never say "certainly", "I'd be happy to", "great question"
+4. FACTS ONLY: Only state what you know for certain
+
+FAMILY (Shane is the FATHER of all 5 sons):
+- Shane Brazelton: Father, Creator of ShaneBrain
+- Tiffany Brazelton: Wife, Mother
+- Gavin Brazelton: Eldest son, married to Angel
+- Kai Brazelton: Second son
+- Pierce Brazelton: Third son, has ADHD like Shane, wrestler
+- Jaxton Brazelton: Fourth son, wrestler
+- Ryker Brazelton: Youngest son
+- Angel Brazelton: Daughter-in-law, married to Gavin
+
+SOBRIETY: Shane has been sober since November 27, 2023 ({sobriety_years} years, {sobriety_months} months)
+
+Be direct. Be brief. Be accurate."""
+
 
 # ---------------------------------------------------------------------------
 # Lifespan — validate connectivity at startup
 # ---------------------------------------------------------------------------
 
 @asynccontextmanager
-async def lifespan():
-    logger.info("ShaneBrain MCP server starting...")
-    for name, url, path in [
-        ("Weaviate", WEAVIATE_URL, "/v1/.well-known/ready"),
-        ("Ollama",   OLLAMA_URL,   "/api/version"),
-    ]:
-        try:
-            async with httpx.AsyncClient(timeout=5.0) as c:
-                r = await c.get(f"{url}{path}")
-                r.raise_for_status()
-            logger.info("✅  %s reachable at %s", name, url)
-        except Exception as exc:
-            logger.warning("⚠️  %s NOT reachable (%s) — tools will return errors until fixed.", name, exc)
-
+async def lifespan(app: FastMCP):
+    logger.info("ShaneBrain MCP v2.0 starting — 27 tools, 12 groups")
+    # Check Weaviate
+    try:
+        with _weaviate() as h:
+            if h.is_ready():
+                logger.info("Weaviate: reachable")
+            else:
+                logger.warning("Weaviate: NOT ready")
+    except Exception as e:
+        logger.warning("Weaviate: NOT reachable (%s)", e)
+    # Check Ollama
+    try:
+        status = check_ollama()
+        if status.get("status") == "ok":
+            logger.info("Ollama: reachable (%d models)", len(status.get("models", [])))
+        else:
+            logger.warning("Ollama: NOT ready")
+    except Exception as e:
+        logger.warning("Ollama: NOT reachable (%s)", e)
+    # Ensure planning dirs
     PLANNING_DIR.mkdir(parents=True, exist_ok=True)
     for sub in ("active-projects", "templates", "completed", "logs"):
         (PLANNING_DIR / sub).mkdir(exist_ok=True)
-    logger.info("📁  Planning dir ready: %s", PLANNING_DIR)
-
+    logger.info("Planning dir: %s", PLANNING_DIR)
     yield {}
+    logger.info("ShaneBrain MCP shutting down.")
 
-    logger.info("ShaneBrain MCP server shutting down.")
 
 # ---------------------------------------------------------------------------
 # FastMCP server
 # ---------------------------------------------------------------------------
+mcp = FastMCP(
+    "ShaneBrain",
+    instructions=(
+        "ShaneBrain AI tools — knowledge, chat, RAG, social, vault, notes, "
+        "drafts, security, admin, ollama, planning, and system health."
+    ),
+    host="0.0.0.0",
+    port=MCP_PORT,
+    lifespan=lifespan,
+)
 
-mcp = FastMCP("shanebrain_mcp", lifespan=lifespan)
 
 # ===========================================================================
-# TOOLS — GROUP 1: Weaviate RAG
+# GROUP 1: Knowledge (LegacyKnowledge) — 2 tools
 # ===========================================================================
 
-class RagSearchInput(BaseModel):
+class SearchKnowledgeInput(BaseModel):
     model_config = ConfigDict(str_strip_whitespace=True, extra="forbid")
+    query: str = Field(..., description="What to search for (e.g. 'family values', 'sobriety journey')", min_length=1, max_length=500)
+    category: Optional[str] = Field(default=None, description="Filter: family, faith, technical, philosophy, general, wellness")
+    limit: int = Field(default=5, ge=1, le=50, description="Max results")
+    response_format: ResponseFormat = Field(default=ResponseFormat.JSON)
 
-    query: str = Field(
-        ...,
-        description="Natural language search query (e.g., 'Angel Cloud crisis detection logic')",
-        min_length=1,
-        max_length=500,
-    )
-    class_name: str = Field(
-        default=WEAVIATE_KNOWLEDGE_CLASS,
-        description=f"Weaviate class to search. Common: '{WEAVIATE_KNOWLEDGE_CLASS}', '{WEAVIATE_MEMORY_CLASS}', '{WEAVIATE_FRIEND_CLASS}'",
-    )
-    limit: int = Field(default=5, ge=1, le=50, description="Max results to return (1–50)")
-    certainty: float = Field(
-        default=0.7, ge=0.0, le=1.0,
-        description="Minimum similarity threshold (0.0–1.0). Higher = stricter match.",
-    )
-    response_format: ResponseFormat = Field(
-        default=ResponseFormat.MARKDOWN,
-        description="'markdown' for readable output, 'json' for structured data",
-    )
 
 @mcp.tool(
-    name="shanebrain_rag_search",
-    annotations={
-        "title": "Search ShaneBrain Knowledge Base (RAG)",
-        "readOnlyHint": True,
-        "destructiveHint": False,
-        "idempotentHint": True,
-        "openWorldHint": False,
-    },
+    name="shanebrain_search_knowledge",
+    annotations={"readOnlyHint": True, "destructiveHint": False, "idempotentHint": True, "openWorldHint": False},
 )
-async def shanebrain_rag_search(params: RagSearchInput, ctx: Context) -> str:
-    """Semantic vector search across ShaneBrain's local Weaviate knowledge base.
+def shanebrain_search_knowledge(params: SearchKnowledgeInput) -> str:
+    """Semantic search across ShaneBrain's legacy knowledge base (LegacyKnowledge).
 
-    Uses nearText to find conceptually similar documents — not keyword matching.
-    Ideal for: retrieving past decisions, project context, conversation memory,
-    crisis patterns, or any knowledge stored in the ShaneBrain RAG pipeline.
-
-    Args:
-        params (RagSearchInput): Validated search parameters including query,
-            class_name, limit, certainty threshold, and response_format.
-
-    Returns:
-        str: Ranked results with content, certainty scores, and metadata.
-             Returns empty result set if no matches exceed certainty threshold.
+    Finds conceptually similar entries — not keyword matching. Covers family,
+    faith, technical decisions, philosophy, and wellness knowledge.
     """
-    await ctx.report_progress(0.1, "Querying Weaviate...")
     try:
-        gql = {
-            "query": f"""
-            {{
-              Get {{
-                {params.class_name}(
-                  nearText: {{ concepts: ["{params.query}"], certainty: {params.certainty} }}
-                  limit: {params.limit}
-                ) {{
-                  _additional {{ id certainty }}
-                  content
-                  source
-                  timestamp
-                  tags
-                }}
-              }}
-            }}
-            """
-        }
-        data = await _weaviate_post("/v1/graphql", gql)
-        await ctx.report_progress(0.9, "Formatting results...")
-        results = data.get("data", {}).get("Get", {}).get(params.class_name, [])
-
-        if not results:
-            return f"No results found in '{params.class_name}' for query: '{params.query}' (certainty ≥ {params.certainty}). Try lowering certainty or broadening the query."
-
-        if params.response_format == ResponseFormat.JSON:
-            return json.dumps({"class": params.class_name, "query": params.query, "results": results}, indent=2)
-
-        lines = [f"## RAG Search: `{params.query}`", f"**Class:** {params.class_name} | **Results:** {len(results)}\n"]
-        for i, r in enumerate(results, 1):
-            score = r.get("_additional", {}).get("certainty", 0)
-            obj_id = r.get("_additional", {}).get("id", "—")
-            content = (r.get("content") or "")[:600]
-            source = r.get("source") or "unknown"
-            ts = r.get("timestamp") or ""
-            tags = ", ".join(r.get("tags") or []) or "none"
-            lines += [
-                f"### Result {i} — Certainty: {score:.2%}",
-                f"**ID:** `{obj_id}`  **Source:** {source}  **Date:** {ts}",
-                f"**Tags:** {tags}",
-                f"```\n{content}\n```\n",
-            ]
-        return "\n".join(lines)
-
+        with _weaviate() as h:
+            results = h.search_knowledge(params.query, category=params.category, limit=params.limit)
+            if not results:
+                return json.dumps({"results": [], "message": f"No matches for '{params.query}'."})
+            if params.response_format == ResponseFormat.MARKDOWN:
+                lines = [f"## Knowledge Search: {params.query}", f"**Results:** {len(results)}\n"]
+                for i, r in enumerate(results, 1):
+                    title = r.get("title", "Untitled")
+                    dist = r.get("_distance", "N/A")
+                    content = (r.get("content") or "")[:400]
+                    lines.append(f"### {i}. {title} (distance: {dist})\n{content}\n")
+                return "\n".join(lines)
+            return json.dumps({"results": results, "count": len(results)}, default=str)
     except Exception as e:
-        return _format_error(e, "shanebrain_rag_search")
+        return _format_error(e, "shanebrain_search_knowledge")
 
 
-class RagStoreInput(BaseModel):
+class AddKnowledgeInput(BaseModel):
     model_config = ConfigDict(str_strip_whitespace=True, extra="forbid")
+    content: str = Field(..., description="The knowledge content", min_length=1, max_length=50000)
+    category: str = Field(..., description="Category: family, faith, technical, philosophy, general, wellness")
+    source: str = Field(default="mcp", description="Where this came from")
+    title: Optional[str] = Field(default=None, description="Optional title")
 
-    content: str = Field(..., description="Text content to store and vectorize", min_length=1, max_length=50000)
-    class_name: str = Field(
-        default=WEAVIATE_KNOWLEDGE_CLASS,
-        description=f"Weaviate class to store into. Common: '{WEAVIATE_KNOWLEDGE_CLASS}', '{WEAVIATE_MEMORY_CLASS}'",
-    )
-    source: str = Field(default="manual", description="Origin of this knowledge (e.g., 'angel_cloud', 'dispatch', 'conversation')")
-    tags: List[str] = Field(default_factory=list, description="Topic tags for filtering (e.g., ['crisis', 'angel-cloud', 'planning'])", max_length=20)
-    timestamp: Optional[str] = Field(
-        default=None,
-        description="ISO 8601 timestamp. Defaults to current UTC time if omitted.",
-    )
 
 @mcp.tool(
-    name="shanebrain_rag_store",
-    annotations={
-        "title": "Store Knowledge in ShaneBrain RAG",
-        "readOnlyHint": False,
-        "destructiveHint": False,
-        "idempotentHint": False,
-        "openWorldHint": False,
-    },
+    name="shanebrain_add_knowledge",
+    annotations={"readOnlyHint": False, "destructiveHint": False, "idempotentHint": False, "openWorldHint": False},
 )
-async def shanebrain_rag_store(params: RagStoreInput, ctx: Context) -> str:
-    """Store a document or knowledge chunk into Weaviate for semantic retrieval.
+def shanebrain_add_knowledge(params: AddKnowledgeInput) -> str:
+    """Add an entry to ShaneBrain's legacy knowledge base (LegacyKnowledge).
 
-    Weaviate automatically generates the vector embedding. The stored object
-    becomes immediately searchable via shanebrain_rag_search. Use this to
-    persist: conversation summaries, project decisions, crisis patterns,
-    code snippets, or any knowledge the AI should recall later.
-
-    Args:
-        params (RagStoreInput): Content, class, source, tags, and optional timestamp.
-
-    Returns:
-        str: Confirmation with the newly created object ID for future reference.
+    Stored content is auto-vectorized and becomes immediately searchable.
     """
-    await ctx.report_progress(0.2, "Storing to Weaviate...")
     try:
-        ts = params.timestamp or datetime.now(timezone.utc).isoformat()
-        obj = {
-            "class": params.class_name,
-            "properties": {
-                "content":   params.content,
-                "source":    params.source,
-                "tags":      params.tags,
-                "timestamp": ts,
-            },
-        }
-        result = await _weaviate_post("/v1/objects", obj)
-        obj_id = result.get("id", "unknown")
-        await ctx.report_progress(1.0, "Stored.")
-        return (
-            f"✅ Stored in `{params.class_name}`\n"
-            f"**ID:** `{obj_id}`\n"
-            f"**Source:** {params.source}\n"
-            f"**Tags:** {', '.join(params.tags) or 'none'}\n"
-            f"**Timestamp:** {ts}\n"
-            f"**Content preview:** {params.content[:120]}..."
-        )
+        with _weaviate() as h:
+            uid = h.add_knowledge(params.content, params.category, source=params.source, title=params.title)
+            if uid:
+                return json.dumps({"success": True, "uuid": uid, "preview": params.content[:120]})
+            return json.dumps({"success": False, "error": "Failed — collection may not exist."})
     except Exception as e:
-        return _format_error(e, "shanebrain_rag_store")
+        return _format_error(e, "shanebrain_add_knowledge")
 
+
+# ===========================================================================
+# GROUP 2: Chat (Conversation) — 3 tools
+# ===========================================================================
+
+class SearchConversationsInput(BaseModel):
+    model_config = ConfigDict(str_strip_whitespace=True, extra="forbid")
+    query: str = Field(..., description="What to search for", min_length=1, max_length=500)
+    mode: Optional[str] = Field(default=None, description="Filter: CHAT, MEMORY, WELLNESS, SECURITY, DISPATCH, CODE")
+    limit: int = Field(default=10, ge=1, le=50)
+
+
+@mcp.tool(
+    name="shanebrain_search_conversations",
+    annotations={"readOnlyHint": True, "destructiveHint": False, "idempotentHint": True, "openWorldHint": False},
+)
+def shanebrain_search_conversations(params: SearchConversationsInput) -> str:
+    """Search past ShaneBrain conversations semantically."""
+    try:
+        with _weaviate() as h:
+            results = h.search_conversations(params.query, mode=params.mode, limit=params.limit)
+            return json.dumps({"results": results, "count": len(results)}, default=str)
+    except Exception as e:
+        return _format_error(e, "shanebrain_search_conversations")
+
+
+class LogConversationInput(BaseModel):
+    model_config = ConfigDict(str_strip_whitespace=True, extra="forbid")
+    message: str = Field(..., description="Message content", min_length=1)
+    role: str = Field(..., description="Role: user, assistant, system")
+    mode: str = Field(default="CHAT", description="Mode: CHAT, MEMORY, WELLNESS, SECURITY, DISPATCH, CODE")
+    session_id: Optional[str] = Field(default=None, description="Session ID (auto-generated if omitted)")
+
+
+@mcp.tool(
+    name="shanebrain_log_conversation",
+    annotations={"readOnlyHint": False, "destructiveHint": False, "idempotentHint": False, "openWorldHint": False},
+)
+def shanebrain_log_conversation(params: LogConversationInput) -> str:
+    """Log a message to ShaneBrain's conversation history."""
+    try:
+        with _weaviate() as h:
+            uid = h.log_conversation(params.message, params.role, mode=params.mode, session_id=params.session_id)
+            if uid:
+                return json.dumps({"success": True, "uuid": uid})
+            return json.dumps({"success": False, "error": "Failed to log."})
+    except Exception as e:
+        return _format_error(e, "shanebrain_log_conversation")
+
+
+class GetConversationHistoryInput(BaseModel):
+    model_config = ConfigDict(str_strip_whitespace=True, extra="forbid")
+    session_id: str = Field(..., description="The session identifier")
+    limit: int = Field(default=50, ge=1, le=200)
+
+
+@mcp.tool(
+    name="shanebrain_get_conversation_history",
+    annotations={"readOnlyHint": True, "destructiveHint": False, "idempotentHint": True, "openWorldHint": False},
+)
+def shanebrain_get_conversation_history(params: GetConversationHistoryInput) -> str:
+    """Get conversation history for a session by ID."""
+    try:
+        with _weaviate() as h:
+            results = h.get_conversation_history(params.session_id, limit=params.limit)
+            return json.dumps({"messages": results, "count": len(results)}, default=str)
+    except Exception as e:
+        return _format_error(e, "shanebrain_get_conversation_history")
+
+
+# ===========================================================================
+# GROUP 3: RAG Chat — 1 tool
+# ===========================================================================
+
+class ChatInput(BaseModel):
+    model_config = ConfigDict(str_strip_whitespace=True, extra="forbid")
+    message: str = Field(..., description="Your message to ShaneBrain", min_length=1, max_length=2000)
+    model: str = Field(default="", description="Ollama model override (default: OLLAMA_MODEL env)")
+    temperature: float = Field(default=0.3, ge=0.0, le=2.0)
+    max_tokens: int = Field(default=100, ge=1, le=4096)
+
+
+@mcp.tool(
+    name="shanebrain_chat",
+    annotations={"readOnlyHint": True, "destructiveHint": False, "idempotentHint": False, "openWorldHint": False},
+)
+def shanebrain_chat(params: ChatInput) -> str:
+    """Full RAG chat — searches knowledge base, then generates via local Ollama.
+
+    Pipeline: semantic search LegacyKnowledge -> inject context -> Ollama generate.
+    100% local, zero cloud. Uses ShaneBrain persona with family knowledge.
+    """
+    try:
+        with _weaviate() as h:
+            # RAG retrieval
+            chunks = []
+            results = h.search_knowledge(params.message, limit=RAG_CHUNK_LIMIT)
+            for r in results:
+                content = r.get("content", "")
+                title = r.get("title", "")
+                if content:
+                    chunks.append(f"[{title}]\n{content}" if title else content)
+
+            # Build prompt
+            system = _get_system_prompt()
+            if chunks:
+                context = "\n\n---\n\n".join(chunks)
+                system += f"\n\nRELEVANT KNOWLEDGE FROM MEMORY:\n{context}\n\nUse this knowledge to answer. If it doesn't help, say you don't know."
+
+            # Generate
+            model = params.model or OLLAMA_MODEL
+            client = _ollama_client()
+            response = client.chat(
+                model=model,
+                messages=[
+                    {"role": "system", "content": system},
+                    {"role": "user", "content": params.message},
+                ],
+                options={"temperature": params.temperature, "num_predict": params.max_tokens},
+                keep_alive="10m",
+            )
+
+            return json.dumps({
+                "response": response["message"]["content"],
+                "knowledge_chunks_used": len(chunks),
+                "model": model,
+            })
+    except Exception as e:
+        return _format_error(e, "shanebrain_chat")
+
+
+# ===========================================================================
+# GROUP 4: Social (FriendProfile) — 2 tools
+# ===========================================================================
+
+class SearchFriendsInput(BaseModel):
+    model_config = ConfigDict(str_strip_whitespace=True, extra="forbid")
+    query: str = Field(..., description="What to search for (e.g. a person's name or topic)", min_length=1, max_length=500)
+    limit: int = Field(default=10, ge=1, le=50)
+
+
+@mcp.tool(
+    name="shanebrain_search_friends",
+    annotations={"readOnlyHint": True, "destructiveHint": False, "idempotentHint": True, "openWorldHint": False},
+)
+def shanebrain_search_friends(params: SearchFriendsInput) -> str:
+    """Search ShaneBrain's friend profiles semantically."""
+    try:
+        with _weaviate() as h:
+            results = h.search_friends(params.query, limit=params.limit)
+            return json.dumps({"results": results, "count": len(results)}, default=str)
+    except Exception as e:
+        return _format_error(e, "shanebrain_search_friends")
+
+
+class GetTopFriendsInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    limit: int = Field(default=10, ge=1, le=50, description="Max results")
+
+
+@mcp.tool(
+    name="shanebrain_get_top_friends",
+    annotations={"readOnlyHint": True, "destructiveHint": False, "idempotentHint": True, "openWorldHint": False},
+)
+def shanebrain_get_top_friends(params: GetTopFriendsInput) -> str:
+    """Get friend profiles ranked by relationship strength (highest first)."""
+    try:
+        with _weaviate() as h:
+            results = h.get_top_friends(limit=params.limit)
+            return json.dumps({"results": results, "count": len(results)}, default=str)
+    except Exception as e:
+        return _format_error(e, "shanebrain_get_top_friends")
+
+
+# ===========================================================================
+# GROUP 5: Vault (PersonalDoc) — 3 tools
+# ===========================================================================
+
+class VaultSearchInput(BaseModel):
+    model_config = ConfigDict(str_strip_whitespace=True, extra="forbid")
+    query: str = Field(..., description="What to search for", min_length=1, max_length=500)
+    category: Optional[str] = Field(default=None, description="Optional category filter")
+    limit: int = Field(default=10, ge=1, le=50)
+
+
+@mcp.tool(
+    name="shanebrain_vault_search",
+    annotations={"readOnlyHint": True, "destructiveHint": False, "idempotentHint": True, "openWorldHint": False},
+)
+def shanebrain_vault_search(params: VaultSearchInput) -> str:
+    """Search Shane's personal vault (PersonalDoc) semantically."""
+    try:
+        with _weaviate() as h:
+            filters = None
+            if params.category:
+                filters = Filter.by_property("category").equal(params.category)
+            results = h._generic_near_text("PersonalDoc", params.query, filters=filters, limit=params.limit)
+            if not results and not h.collection_exists("PersonalDoc"):
+                return json.dumps({"results": [], "message": "PersonalDoc collection does not exist yet."})
+            return json.dumps({"results": results, "count": len(results)}, default=str)
+    except Exception as e:
+        return _format_error(e, "shanebrain_vault_search")
+
+
+class VaultAddInput(BaseModel):
+    model_config = ConfigDict(str_strip_whitespace=True, extra="forbid")
+    content: str = Field(..., description="Document content", min_length=1, max_length=50000)
+    category: str = Field(..., description="Category: medical, legal, financial, personal, work")
+    title: Optional[str] = Field(default=None, description="Optional title")
+    tags: Optional[str] = Field(default=None, description="Comma-separated tags")
+
+
+@mcp.tool(
+    name="shanebrain_vault_add",
+    annotations={"readOnlyHint": False, "destructiveHint": False, "idempotentHint": False, "openWorldHint": False},
+)
+def shanebrain_vault_add(params: VaultAddInput) -> str:
+    """Add a document to Shane's personal vault (PersonalDoc)."""
+    try:
+        with _weaviate() as h:
+            data = {
+                "content": params.content,
+                "category": params.category,
+                "created_at": datetime.now(timezone.utc).isoformat(),
+            }
+            if params.title:
+                data["title"] = params.title
+            if params.tags:
+                data["tags"] = [t.strip() for t in params.tags.split(",")]
+            uid = h._generic_insert("PersonalDoc", data)
+            if uid:
+                return json.dumps({"success": True, "uuid": uid})
+            return json.dumps({"success": False, "error": "PersonalDoc collection may not exist."})
+    except Exception as e:
+        return _format_error(e, "shanebrain_vault_add")
+
+
+class VaultListCategoriesInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    limit: int = Field(default=100, ge=1, le=500)
+
+
+@mcp.tool(
+    name="shanebrain_vault_list_categories",
+    annotations={"readOnlyHint": True, "destructiveHint": False, "idempotentHint": True, "openWorldHint": False},
+)
+def shanebrain_vault_list_categories(params: VaultListCategoriesInput) -> str:
+    """List document counts per category in the PersonalDoc vault."""
+    try:
+        with _weaviate() as h:
+            if not h.collection_exists("PersonalDoc"):
+                return json.dumps({"error": "PersonalDoc collection does not exist yet.", "categories": {}})
+            docs = h._generic_fetch("PersonalDoc", limit=params.limit)
+            counts = {}
+            for d in docs:
+                cat = d.get("category", "uncategorized")
+                counts[cat] = counts.get(cat, 0) + 1
+            return json.dumps({"categories": counts, "total": len(docs)})
+    except Exception as e:
+        return _format_error(e, "shanebrain_vault_list_categories")
+
+
+# ===========================================================================
+# GROUP 6: Notes (DailyNote) — 3 tools
+# ===========================================================================
+
+class DailyNoteAddInput(BaseModel):
+    model_config = ConfigDict(str_strip_whitespace=True, extra="forbid")
+    content: str = Field(..., description="Note content", min_length=1)
+    note_type: str = Field(default="journal", description="Type: journal, todo, reminder, reflection")
+    mood: Optional[str] = Field(default=None, description="Mood tag: grateful, tired, focused, anxious, etc.")
+
+
+@mcp.tool(
+    name="shanebrain_daily_note_add",
+    annotations={"readOnlyHint": False, "destructiveHint": False, "idempotentHint": False, "openWorldHint": False},
+)
+def shanebrain_daily_note_add(params: DailyNoteAddInput) -> str:
+    """Add a daily note (journal, todo, reminder, or reflection)."""
+    try:
+        with _weaviate() as h:
+            data = {
+                "content": params.content,
+                "note_type": params.note_type,
+                "date": datetime.now(timezone.utc).strftime("%Y-%m-%d"),
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+            }
+            if params.mood:
+                data["mood"] = params.mood
+            uid = h._generic_insert("DailyNote", data)
+            if uid:
+                return json.dumps({"success": True, "uuid": uid})
+            return json.dumps({"success": False, "error": "DailyNote collection does not exist yet."})
+    except Exception as e:
+        return _format_error(e, "shanebrain_daily_note_add")
+
+
+class DailyNoteSearchInput(BaseModel):
+    model_config = ConfigDict(str_strip_whitespace=True, extra="forbid")
+    query: str = Field(..., description="What to search for", min_length=1, max_length=500)
+    note_type: Optional[str] = Field(default=None, description="Filter: journal, todo, reminder, reflection")
+    limit: int = Field(default=10, ge=1, le=50)
+
+
+@mcp.tool(
+    name="shanebrain_daily_note_search",
+    annotations={"readOnlyHint": True, "destructiveHint": False, "idempotentHint": True, "openWorldHint": False},
+)
+def shanebrain_daily_note_search(params: DailyNoteSearchInput) -> str:
+    """Search daily notes semantically."""
+    try:
+        with _weaviate() as h:
+            filters = None
+            if params.note_type:
+                filters = Filter.by_property("note_type").equal(params.note_type)
+            results = h._generic_near_text("DailyNote", params.query, filters=filters, limit=params.limit)
+            if not results and not h.collection_exists("DailyNote"):
+                return json.dumps({"results": [], "message": "DailyNote collection does not exist yet."})
+            return json.dumps({"results": results, "count": len(results)}, default=str)
+    except Exception as e:
+        return _format_error(e, "shanebrain_daily_note_search")
+
+
+@mcp.tool(
+    name="shanebrain_daily_briefing",
+    annotations={"readOnlyHint": True, "destructiveHint": False, "idempotentHint": False, "openWorldHint": False},
+)
+def shanebrain_daily_briefing() -> str:
+    """AI-generated daily briefing summarizing recent notes via Ollama."""
+    try:
+        with _weaviate() as h:
+            if not h.collection_exists("DailyNote"):
+                return json.dumps({"error": "DailyNote collection does not exist yet."})
+
+            notes = h._generic_fetch("DailyNote", limit=20)
+            if not notes:
+                return json.dumps({"briefing": "No daily notes found.", "note_count": 0})
+
+            note_texts = []
+            for n in notes:
+                ntype = n.get("note_type", "note")
+                content = n.get("content", "")
+                date = n.get("date", "")
+                note_texts.append(f"[{date} - {ntype}] {content}")
+
+            client = _ollama_client()
+            response = client.chat(
+                model=OLLAMA_MODEL,
+                messages=[
+                    {"role": "system", "content": "You are ShaneBrain. Summarize these daily notes into a brief daily briefing. Be concise — bullet points preferred."},
+                    {"role": "user", "content": f"Here are recent notes:\n\n" + "\n".join(note_texts) + "\n\nGive me a daily briefing."},
+                ],
+                options={"temperature": 0.3, "num_predict": 100},
+                keep_alive="10m",
+            )
+            return json.dumps({
+                "briefing": response["message"]["content"],
+                "note_count": len(notes),
+            })
+    except Exception as e:
+        return _format_error(e, "shanebrain_daily_briefing")
+
+
+# ===========================================================================
+# GROUP 7: Drafts (PersonalDraft) — 2 tools
+# ===========================================================================
+
+class DraftCreateInput(BaseModel):
+    model_config = ConfigDict(str_strip_whitespace=True, extra="forbid")
+    prompt: str = Field(..., description="What to write about", min_length=1, max_length=2000)
+    draft_type: str = Field(default="general", description="Type: email, message, post, letter, general")
+    use_vault_context: bool = Field(default=True, description="Search PersonalDoc for context (default True)")
+
+
+@mcp.tool(
+    name="shanebrain_draft_create",
+    annotations={"readOnlyHint": False, "destructiveHint": False, "idempotentHint": False, "openWorldHint": False},
+)
+def shanebrain_draft_create(params: DraftCreateInput) -> str:
+    """Generate a writing draft with optional vault context via Ollama.
+
+    Searches PersonalDoc for relevant context, then generates in Shane's voice.
+    Saves the result to PersonalDraft collection.
+    """
+    try:
+        with _weaviate() as h:
+            context_chunks = []
+            if params.use_vault_context and h.collection_exists("PersonalDoc"):
+                results = h._generic_near_text("PersonalDoc", params.prompt, limit=3)
+                for r in results:
+                    content = r.get("content", "")
+                    if content:
+                        context_chunks.append(content)
+
+            system = "You are ShaneBrain, helping Shane draft content. Match his voice: direct, warm, no fluff."
+            if context_chunks:
+                system += f"\n\nRelevant context from vault:\n" + "\n---\n".join(context_chunks)
+
+            client = _ollama_client()
+            response = client.chat(
+                model=OLLAMA_MODEL,
+                messages=[
+                    {"role": "system", "content": system},
+                    {"role": "user", "content": f"Draft a {params.draft_type}: {params.prompt}"},
+                ],
+                options={"temperature": 0.5, "num_predict": 150},
+                keep_alive="10m",
+            )
+
+            draft_text = response["message"]["content"]
+
+            saved_uuid = None
+            if h.collection_exists("PersonalDraft"):
+                saved_uuid = h._generic_insert("PersonalDraft", {
+                    "content": draft_text,
+                    "prompt": params.prompt,
+                    "draft_type": params.draft_type,
+                    "timestamp": datetime.now(timezone.utc).isoformat(),
+                })
+
+            return json.dumps({
+                "draft": draft_text,
+                "draft_type": params.draft_type,
+                "saved": saved_uuid is not None,
+                "uuid": saved_uuid,
+                "vault_context_used": len(context_chunks),
+            })
+    except Exception as e:
+        return _format_error(e, "shanebrain_draft_create")
+
+
+class DraftSearchInput(BaseModel):
+    model_config = ConfigDict(str_strip_whitespace=True, extra="forbid")
+    query: str = Field(..., description="What to search for", min_length=1, max_length=500)
+    draft_type: Optional[str] = Field(default=None, description="Filter: email, message, post, letter, general")
+    limit: int = Field(default=10, ge=1, le=50)
+
+
+@mcp.tool(
+    name="shanebrain_draft_search",
+    annotations={"readOnlyHint": True, "destructiveHint": False, "idempotentHint": True, "openWorldHint": False},
+)
+def shanebrain_draft_search(params: DraftSearchInput) -> str:
+    """Search saved writing drafts (PersonalDraft) semantically."""
+    try:
+        with _weaviate() as h:
+            filters = None
+            if params.draft_type:
+                filters = Filter.by_property("draft_type").equal(params.draft_type)
+            results = h._generic_near_text("PersonalDraft", params.query, filters=filters, limit=params.limit)
+            if not results and not h.collection_exists("PersonalDraft"):
+                return json.dumps({"results": [], "message": "PersonalDraft collection does not exist yet."})
+            return json.dumps({"results": results, "count": len(results)}, default=str)
+    except Exception as e:
+        return _format_error(e, "shanebrain_draft_search")
+
+
+# ===========================================================================
+# GROUP 8: Security (SecurityLog, PrivacyAudit) — 3 tools
+# ===========================================================================
+
+class SecurityLogSearchInput(BaseModel):
+    model_config = ConfigDict(str_strip_whitespace=True, extra="forbid")
+    query: str = Field(..., description="What to search for (e.g. 'failed login', 'unusual activity')", min_length=1, max_length=500)
+    limit: int = Field(default=10, ge=1, le=50)
+
+
+@mcp.tool(
+    name="shanebrain_security_log_search",
+    annotations={"readOnlyHint": True, "destructiveHint": False, "idempotentHint": True, "openWorldHint": False},
+)
+def shanebrain_security_log_search(params: SecurityLogSearchInput) -> str:
+    """Search SecurityLog entries semantically."""
+    try:
+        with _weaviate() as h:
+            results = h._generic_near_text("SecurityLog", params.query, limit=params.limit)
+            if not results and not h.collection_exists("SecurityLog"):
+                return json.dumps({"results": [], "message": "SecurityLog collection does not exist yet."})
+            return json.dumps({"results": results, "count": len(results)}, default=str)
+    except Exception as e:
+        return _format_error(e, "shanebrain_security_log_search")
+
+
+class SecurityLogRecentInput(BaseModel):
+    model_config = ConfigDict(str_strip_whitespace=True, extra="forbid")
+    severity: str = Field(default="", description="Filter: low, medium, high, critical. Empty for all.")
+    limit: int = Field(default=20, ge=1, le=100)
+
+
+@mcp.tool(
+    name="shanebrain_security_log_recent",
+    annotations={"readOnlyHint": True, "destructiveHint": False, "idempotentHint": True, "openWorldHint": False},
+)
+def shanebrain_security_log_recent(params: SecurityLogRecentInput) -> str:
+    """Get recent security log entries (chronological, not semantic)."""
+    try:
+        with _weaviate() as h:
+            if not h.collection_exists("SecurityLog"):
+                return json.dumps({"results": [], "message": "SecurityLog collection does not exist yet."})
+            collection = h.client.collections.get("SecurityLog")
+            if params.severity:
+                response = collection.query.fetch_objects(
+                    filters=Filter.by_property("severity").equal(params.severity),
+                    limit=params.limit,
+                )
+            else:
+                response = collection.query.fetch_objects(limit=params.limit)
+            results = [obj.properties for obj in response.objects]
+            return json.dumps({"results": results, "count": len(results)}, default=str)
+    except Exception as e:
+        return _format_error(e, "shanebrain_security_log_recent")
+
+
+class PrivacyAuditSearchInput(BaseModel):
+    model_config = ConfigDict(str_strip_whitespace=True, extra="forbid")
+    query: str = Field(..., description="What to search for", min_length=1, max_length=500)
+    limit: int = Field(default=10, ge=1, le=50)
+
+
+@mcp.tool(
+    name="shanebrain_privacy_audit_search",
+    annotations={"readOnlyHint": True, "destructiveHint": False, "idempotentHint": True, "openWorldHint": False},
+)
+def shanebrain_privacy_audit_search(params: PrivacyAuditSearchInput) -> str:
+    """Search PrivacyAudit entries semantically."""
+    try:
+        with _weaviate() as h:
+            results = h._generic_near_text("PrivacyAudit", params.query, limit=params.limit)
+            if not results and not h.collection_exists("PrivacyAudit"):
+                return json.dumps({"results": [], "message": "PrivacyAudit collection does not exist yet."})
+            return json.dumps({"results": results, "count": len(results)}, default=str)
+    except Exception as e:
+        return _format_error(e, "shanebrain_privacy_audit_search")
+
+
+# ===========================================================================
+# GROUP 9: Weaviate Admin — 2 tools (NEW from GitHub)
+# ===========================================================================
 
 class RagDeleteInput(BaseModel):
     model_config = ConfigDict(extra="forbid")
+    collection_name: str = Field(..., description="Weaviate collection the object belongs to")
     object_id: str = Field(..., description="Weaviate object UUID to delete (get from search results)")
-    class_name: str = Field(..., description="Weaviate class the object belongs to")
+
 
 @mcp.tool(
     name="shanebrain_rag_delete",
-    annotations={
-        "title": "Delete Object from Weaviate",
-        "readOnlyHint": False,
-        "destructiveHint": True,
-        "idempotentHint": True,
-        "openWorldHint": False,
-    },
+    annotations={"readOnlyHint": False, "destructiveHint": True, "idempotentHint": True, "openWorldHint": False},
 )
-async def shanebrain_rag_delete(params: RagDeleteInput) -> str:
+def shanebrain_rag_delete(params: RagDeleteInput) -> str:
     """Permanently delete a specific object from Weaviate by UUID.
 
     Use with caution — deletion is irreversible. Get the object ID first
-    using shanebrain_rag_search and inspecting the _additional.id field.
-
-    Args:
-        params (RagDeleteInput): object_id (UUID) and class_name.
-
-    Returns:
-        str: Confirmation of deletion or error if not found.
+    using a search tool and inspecting the results.
     """
     try:
-        await _weaviate_delete(f"/v1/objects/{params.class_name}/{params.object_id}")
-        return f"🗑️ Deleted object `{params.object_id}` from class `{params.class_name}`."
-    except httpx.HTTPStatusError as e:
-        if e.response.status_code == 404:
-            return f"Object `{params.object_id}` not found in class `{params.class_name}`. Already deleted?"
-        return _format_error(e, "shanebrain_rag_delete")
+        with _weaviate() as h:
+            if not h.collection_exists(params.collection_name):
+                return json.dumps({"error": f"Collection '{params.collection_name}' does not exist."})
+            collection = h.client.collections.get(params.collection_name)
+            collection.data.delete_by_id(params.object_id)
+            return json.dumps({"success": True, "deleted": params.object_id, "collection": params.collection_name})
     except Exception as e:
         return _format_error(e, "shanebrain_rag_delete")
 
@@ -355,123 +798,74 @@ class RagListClassesInput(BaseModel):
     model_config = ConfigDict(extra="forbid")
     response_format: ResponseFormat = Field(default=ResponseFormat.MARKDOWN)
 
+
 @mcp.tool(
     name="shanebrain_rag_list_classes",
-    annotations={
-        "title": "List Weaviate Schema Classes",
-        "readOnlyHint": True,
-        "destructiveHint": False,
-        "idempotentHint": True,
-        "openWorldHint": False,
-    },
+    annotations={"readOnlyHint": True, "destructiveHint": False, "idempotentHint": True, "openWorldHint": False},
 )
-async def shanebrain_rag_list_classes(params: RagListClassesInput) -> str:
-    """List all classes (schemas) in the local Weaviate instance with object counts.
+def shanebrain_rag_list_classes(params: RagListClassesInput) -> str:
+    """List all Weaviate collections with object counts.
 
-    Useful for discovering what data is stored, checking schema health, and
-    understanding which class_name to use in search/store operations.
-
-    Returns:
-        str: Table of class names, property counts, and object counts.
+    Useful for discovering what data is stored, checking health, and
+    understanding which collections to search.
     """
     try:
-        schema = await _weaviate_get("/v1/schema")
-        classes = schema.get("classes", [])
-        if not classes:
-            return "No classes found in Weaviate schema. Run your schema setup scripts first."
-
-        if params.response_format == ResponseFormat.JSON:
-            return json.dumps(classes, indent=2)
-
-        lines = ["## Weaviate Schema Classes\n", "| Class | Properties | Vectorizer |", "|-------|-----------|------------|"]
-        for c in classes:
-            name = c.get("class", "?")
-            props = len(c.get("properties", []))
-            vectorizer = c.get("vectorizer", "none")
-            lines.append(f"| `{name}` | {props} | {vectorizer} |")
-        return "\n".join(lines)
+        with _weaviate() as h:
+            counts = h.get_all_collection_counts()
+            total = sum(counts.values())
+            if params.response_format == ResponseFormat.MARKDOWN:
+                lines = ["## Weaviate Collections\n", "| Collection | Objects |", "|------------|---------|"]
+                for name, count in counts.items():
+                    lines.append(f"| `{name}` | {count} |")
+                lines.append(f"\n**Total:** {total} objects across {len(counts)} collections")
+                return "\n".join(lines)
+            return json.dumps({"collections": counts, "total": total})
     except Exception as e:
         return _format_error(e, "shanebrain_rag_list_classes")
 
 
 # ===========================================================================
-# TOOLS — GROUP 2: Ollama Local Inference
+# GROUP 10: Ollama Local Inference — 2 tools (NEW from GitHub)
 # ===========================================================================
 
 class OllamaGenerateInput(BaseModel):
     model_config = ConfigDict(str_strip_whitespace=True, extra="forbid")
+    prompt: str = Field(..., description="Prompt or question for the local model", min_length=1, max_length=8000)
+    model: str = Field(default="", description="Ollama model name (default: OLLAMA_MODEL env)")
+    system_prompt: Optional[str] = Field(default=None, description="Optional system prompt", max_length=2000)
+    temperature: float = Field(default=0.7, ge=0.0, le=2.0)
+    max_tokens: int = Field(default=512, ge=1, le=4096)
 
-    prompt: str = Field(..., description="The prompt or question to send to the local model", min_length=1, max_length=8000)
-    model: str = Field(
-        default=DEFAULT_MODEL,
-        description=f"Ollama model name (e.g., '{DEFAULT_MODEL}', 'llama3.2:3b', 'mistral'). Use shanebrain_ollama_list_models to see available.",
-    )
-    system_prompt: Optional[str] = Field(
-        default=None,
-        description="Optional system prompt to set model behavior/persona",
-        max_length=2000,
-    )
-    temperature: float = Field(
-        default=0.7, ge=0.0, le=2.0,
-        description="Sampling temperature. 0.0 = deterministic, 2.0 = very creative.",
-    )
-    max_tokens: int = Field(
-        default=512, ge=1, le=4096,
-        description="Max tokens to generate. Keep low on 1b model for speed.",
-    )
 
 @mcp.tool(
     name="shanebrain_ollama_generate",
-    annotations={
-        "title": "Generate Text with Local Ollama Model",
-        "readOnlyHint": True,
-        "destructiveHint": False,
-        "idempotentHint": False,
-        "openWorldHint": False,
-    },
+    annotations={"readOnlyHint": True, "destructiveHint": False, "idempotentHint": False, "openWorldHint": False},
 )
-async def shanebrain_ollama_generate(params: OllamaGenerateInput, ctx: Context) -> str:
+def shanebrain_ollama_generate(params: OllamaGenerateInput) -> str:
     """Generate text using a locally-running Ollama model. Zero cloud dependency.
 
-    The default model (llama3.2:1b) is optimized for Pi 5 memory constraints.
-    For better quality, use llama3.2:3b if RAM allows. For code, use codellama.
-
-    Args:
-        params (OllamaGenerateInput): prompt, model, system_prompt, temperature, max_tokens.
-
-    Returns:
-        str: Generated text response from the local model with metadata footer.
+    For RAG-grounded answers use shanebrain_chat instead. This tool is for
+    direct generation without knowledge base context.
     """
-    await ctx.report_progress(0.1, f"Sending to {params.model}...")
     try:
-        body: Dict[str, Any] = {
-            "model": params.model,
-            "prompt": params.prompt,
-            "stream": False,
-            "options": {
-                "temperature": params.temperature,
-                "num_predict": params.max_tokens,
-            },
-        }
-        if params.system_prompt:
-            body["system"] = params.system_prompt
-
-        await ctx.report_progress(0.4, "Model generating...")
-        result = await _ollama_post("/api/generate", body)
-        await ctx.report_progress(0.9, "Formatting response...")
-
-        response_text = result.get("response", "").strip()
-        eval_count = result.get("eval_count", 0)
-        total_duration_s = result.get("total_duration", 0) / 1e9
-
-        footer = (
-            f"\n\n---\n*Model: `{params.model}` | "
-            f"Tokens: {eval_count} | "
-            f"Time: {total_duration_s:.1f}s | "
-            f"Local inference — zero cloud cost*"
+        model = params.model or OLLAMA_MODEL
+        client = _ollama_client()
+        response = client.generate(
+            model=model,
+            prompt=params.prompt,
+            system=params.system_prompt or "",
+            options={"temperature": params.temperature, "num_predict": params.max_tokens},
+            keep_alive="10m",
         )
-        return response_text + footer
-
+        text = response.get("response", "").strip()
+        eval_count = response.get("eval_count", 0)
+        total_ns = response.get("total_duration", 0)
+        return json.dumps({
+            "response": text,
+            "model": model,
+            "tokens": eval_count,
+            "duration_s": round(total_ns / 1e9, 1) if total_ns else 0,
+        })
     except Exception as e:
         return _format_error(e, "shanebrain_ollama_generate")
 
@@ -480,77 +874,54 @@ class OllamaListModelsInput(BaseModel):
     model_config = ConfigDict(extra="forbid")
     response_format: ResponseFormat = Field(default=ResponseFormat.MARKDOWN)
 
+
 @mcp.tool(
     name="shanebrain_ollama_list_models",
-    annotations={
-        "title": "List Available Ollama Models",
-        "readOnlyHint": True,
-        "destructiveHint": False,
-        "idempotentHint": True,
-        "openWorldHint": False,
-    },
+    annotations={"readOnlyHint": True, "destructiveHint": False, "idempotentHint": True, "openWorldHint": False},
 )
-async def shanebrain_ollama_list_models(params: OllamaListModelsInput) -> str:
-    """List all Ollama models currently downloaded on this Pi.
-
-    Use this before calling shanebrain_ollama_generate to confirm a model is
-    available. Shows model name, size, and last modified date.
-
-    Returns:
-        str: Table of available local models with sizes.
-    """
+def shanebrain_ollama_list_models(params: OllamaListModelsInput) -> str:
+    """List all Ollama models currently downloaded on this Pi."""
     try:
-        data = await _ollama_get("/api/tags")
+        client = _ollama_client()
+        data = client.list()
         models = data.get("models", [])
         if not models:
-            return "No models found. Pull a model: `ollama pull llama3.2:1b`"
+            return "No models found. Pull one: `ollama pull llama3.2:1b`"
 
-        if params.response_format == ResponseFormat.JSON:
-            return json.dumps(models, indent=2)
-
-        lines = ["## Local Ollama Models\n", "| Model | Size | Modified |", "|-------|------|----------|"]
-        for m in models:
-            name = m.get("name", "?")
-            size_gb = m.get("size", 0) / 1e9
-            modified = m.get("modified_at", "")[:10]
-            lines.append(f"| `{name}` | {size_gb:.1f} GB | {modified} |")
-        return "\n".join(lines)
+        if params.response_format == ResponseFormat.MARKDOWN:
+            lines = ["## Local Ollama Models\n", "| Model | Size | Modified |", "|-------|------|----------|"]
+            for m in models:
+                name = m.get("name", "?")
+                size_gb = m.get("size", 0) / 1e9
+                modified = str(m.get("modified_at", ""))[:10]
+                lines.append(f"| `{name}` | {size_gb:.1f} GB | {modified} |")
+            return "\n".join(lines)
+        return json.dumps({"models": models}, default=str)
     except Exception as e:
         return _format_error(e, "shanebrain_ollama_list_models")
 
 
 # ===========================================================================
-# TOOLS — GROUP 3: Planning System (Markdown files)
+# GROUP 11: Planning System — 3 tools (NEW from GitHub)
 # ===========================================================================
 
 class PlanListInput(BaseModel):
     model_config = ConfigDict(extra="forbid")
     subfolder: str = Field(
         default="active-projects",
-        description="Subfolder to list: 'active-projects', 'templates', 'completed', 'logs'",
+        description="Subfolder: 'active-projects', 'templates', 'completed', 'logs'",
     )
+
 
 @mcp.tool(
     name="shanebrain_plan_list",
-    annotations={
-        "title": "List Planning System Files",
-        "readOnlyHint": True,
-        "destructiveHint": False,
-        "idempotentHint": True,
-        "openWorldHint": False,
-    },
+    annotations={"readOnlyHint": True, "destructiveHint": False, "idempotentHint": True, "openWorldHint": False},
 )
-async def shanebrain_plan_list(params: PlanListInput) -> str:
-    """List markdown planning files in the ShaneBrain planning system directory.
+def shanebrain_plan_list(params: PlanListInput) -> str:
+    """List markdown planning files in the ShaneBrain planning system.
 
-    The planning system uses persistent markdown files for multi-session project
-    continuity. Use this to discover existing plans before reading or writing.
-
-    Args:
-        params (PlanListInput): subfolder to list.
-
-    Returns:
-        str: File listing with sizes and modification dates.
+    The planning system uses persistent markdown files for multi-session
+    project continuity. Discover files before reading or writing.
     """
     try:
         folder = PLANNING_DIR / params.subfolder
@@ -559,7 +930,7 @@ async def shanebrain_plan_list(params: PlanListInput) -> str:
 
         files = sorted(folder.glob("*.md"))
         if not files:
-            return f"No markdown files found in '{params.subfolder}'."
+            return f"No markdown files in '{params.subfolder}'."
 
         lines = [f"## Planning Files: `{params.subfolder}`\n"]
         for f in files:
@@ -574,9 +945,8 @@ async def shanebrain_plan_list(params: PlanListInput) -> str:
 
 class PlanReadInput(BaseModel):
     model_config = ConfigDict(str_strip_whitespace=True, extra="forbid")
-
-    filename: str = Field(..., description="Filename to read (e.g., 'angel-cloud-phase2.md'). Include .md extension.", min_length=1)
-    subfolder: str = Field(default="active-projects", description="Subfolder containing the file")
+    filename: str = Field(..., description="Filename to read (e.g. 'angel-cloud-phase2.md')", min_length=1)
+    subfolder: str = Field(default="active-projects")
 
     @field_validator("filename")
     @classmethod
@@ -585,28 +955,15 @@ class PlanReadInput(BaseModel):
             raise ValueError("Filename must not contain path separators or '..'")
         return v
 
+
 @mcp.tool(
     name="shanebrain_plan_read",
-    annotations={
-        "title": "Read a Planning File",
-        "readOnlyHint": True,
-        "destructiveHint": False,
-        "idempotentHint": True,
-        "openWorldHint": False,
-    },
+    annotations={"readOnlyHint": True, "destructiveHint": False, "idempotentHint": True, "openWorldHint": False},
 )
-async def shanebrain_plan_read(params: PlanReadInput) -> str:
+def shanebrain_plan_read(params: PlanReadInput) -> str:
     """Read the full content of a markdown planning file.
 
-    Use shanebrain_plan_list first to discover available files. Planning files
-    contain project context, task tracking, error logs, and session continuity
-    notes that enable multi-session ADHD-friendly project management.
-
-    Args:
-        params (PlanReadInput): filename and subfolder.
-
-    Returns:
-        str: Full file content with metadata header.
+    Use shanebrain_plan_list first to discover available files.
     """
     try:
         path = PLANNING_DIR / params.subfolder / params.filename
@@ -616,18 +973,17 @@ async def shanebrain_plan_read(params: PlanReadInput) -> str:
         content = path.read_text(encoding="utf-8")
         stat = path.stat()
         mtime = datetime.fromtimestamp(stat.st_mtime).strftime("%Y-%m-%d %H:%M")
-        return f"## {params.filename}\n*Path: {path} | Modified: {mtime} | Size: {stat.st_size/1024:.1f} KB*\n\n---\n\n{content}"
+        return f"## {params.filename}\n*Modified: {mtime} | Size: {stat.st_size / 1024:.1f} KB*\n\n---\n\n{content}"
     except Exception as e:
         return _format_error(e, "shanebrain_plan_read")
 
 
 class PlanWriteInput(BaseModel):
     model_config = ConfigDict(str_strip_whitespace=True, extra="forbid")
-
-    filename: str = Field(..., description="Filename to create/overwrite (e.g., 'logibot-sprint1.md'). Must end in .md.", min_length=1)
+    filename: str = Field(..., description="Filename (must end in .md)", min_length=1)
     content: str = Field(..., description="Full markdown content to write", min_length=1, max_length=100000)
-    subfolder: str = Field(default="active-projects", description="Subfolder: 'active-projects', 'templates', 'completed', 'logs'")
-    append: bool = Field(default=False, description="If True, append to existing file. If False (default), overwrite.")
+    subfolder: str = Field(default="active-projects")
+    append: bool = Field(default=False, description="Append to existing file instead of overwrite")
 
     @field_validator("filename")
     @classmethod
@@ -638,27 +994,16 @@ class PlanWriteInput(BaseModel):
             raise ValueError("Filename must end with .md")
         return v
 
+
 @mcp.tool(
     name="shanebrain_plan_write",
-    annotations={
-        "title": "Write or Append to a Planning File",
-        "readOnlyHint": False,
-        "destructiveHint": False,
-        "idempotentHint": False,
-        "openWorldHint": False,
-    },
+    annotations={"readOnlyHint": False, "destructiveHint": False, "idempotentHint": False, "openWorldHint": False},
 )
-async def shanebrain_plan_write(params: PlanWriteInput) -> str:
-    """Create or update a markdown planning file in the ShaneBrain planning system.
+def shanebrain_plan_write(params: PlanWriteInput) -> str:
+    """Create or update a markdown planning file.
 
-    Supports both full overwrite and append modes. Use append=True to add session
-    notes, error logs, or progress updates without losing prior content.
-
-    Args:
-        params (PlanWriteInput): filename, content, subfolder, append flag.
-
-    Returns:
-        str: Confirmation with path and size written.
+    Supports overwrite and append modes. Use append=True to add session
+    notes or progress updates without losing prior content.
     """
     try:
         folder = PLANNING_DIR / params.subfolder
@@ -673,218 +1018,80 @@ async def shanebrain_plan_write(params: PlanWriteInput) -> str:
 
         size_kb = path.stat().st_size / 1024
         action = "Appended to" if params.append else "Wrote"
-        return (
-            f"✅ {action} `{params.subfolder}/{params.filename}`\n"
-            f"**Path:** {path}\n"
-            f"**Size:** {size_kb:.1f} KB"
-        )
+        return json.dumps({"success": True, "action": action, "file": f"{params.subfolder}/{params.filename}", "size_kb": round(size_kb, 1)})
     except Exception as e:
         return _format_error(e, "shanebrain_plan_write")
 
 
 # ===========================================================================
-# TOOLS — GROUP 4: System Health
+# GROUP 12: System Health — 1 tool
 # ===========================================================================
-
-class HealthCheckInput(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-    verbose: bool = Field(default=False, description="Include version/detail info in output")
 
 @mcp.tool(
     name="shanebrain_system_health",
-    annotations={
-        "title": "Check ShaneBrain Service Health",
-        "readOnlyHint": True,
-        "destructiveHint": False,
-        "idempotentHint": False,
-        "openWorldHint": False,
-    },
+    annotations={"readOnlyHint": True, "destructiveHint": False, "idempotentHint": False, "openWorldHint": False},
 )
-async def shanebrain_system_health(params: HealthCheckInput, ctx: Context) -> str:
-    """Check the health status of all ShaneBrain infrastructure services.
-
-    Pings Weaviate, Ollama, and the planning filesystem. Returns status for
-    each with latency. Use this to diagnose connectivity issues before running
-    other tools, or to confirm services are up after a Pi reboot.
-
-    Args:
-        params (HealthCheckInput): verbose flag for extra detail.
-
-    Returns:
-        str: Health dashboard with status, latency, and version info.
-    """
-    await ctx.report_progress(0.1, "Checking services...")
-    results = {}
-
-    # Weaviate
+def shanebrain_system_health() -> str:
+    """Check ShaneBrain system health — Weaviate, Ollama, Gateway + all collection counts."""
     try:
-        import time
-        t0 = time.monotonic()
-        wdata = await _weaviate_get("/v1/.well-known/ready")
-        latency = (time.monotonic() - t0) * 1000
-        results["Weaviate"] = {"status": "✅ UP", "latency_ms": round(latency, 1), "detail": str(wdata)}
+        with _weaviate() as h:
+            weaviate_status = check_weaviate(h)
+            ollama_status = check_ollama()
+            gateway_status = check_gateway()
+            counts = h.get_all_collection_counts()
+
+            return json.dumps({
+                "services": {
+                    "weaviate": weaviate_status,
+                    "ollama": ollama_status,
+                    "gateway": gateway_status,
+                },
+                "collections": counts,
+                "total_objects": sum(counts.values()),
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+            }, default=str)
     except Exception as e:
-        results["Weaviate"] = {"status": "❌ DOWN", "latency_ms": None, "detail": str(e)[:100]}
-
-    # Ollama
-    try:
-        import time
-        t0 = time.monotonic()
-        odata = await _ollama_get("/api/version")
-        latency = (time.monotonic() - t0) * 1000
-        version = odata.get("version", "unknown")
-        results["Ollama"] = {"status": "✅ UP", "latency_ms": round(latency, 1), "detail": f"v{version}"}
-    except Exception as e:
-        results["Ollama"] = {"status": "❌ DOWN", "latency_ms": None, "detail": str(e)[:100]}
-
-    # Planning filesystem
-    try:
-        files = list(PLANNING_DIR.rglob("*.md"))
-        results["Planning FS"] = {"status": "✅ UP", "latency_ms": 0, "detail": f"{len(files)} .md files at {PLANNING_DIR}"}
-    except Exception as e:
-        results["Planning FS"] = {"status": "❌ DOWN", "latency_ms": None, "detail": str(e)[:100]}
-
-    await ctx.report_progress(0.9, "Building report...")
-    lines = ["## ShaneBrain System Health\n"]
-    lines.append(f"*Checked: {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M UTC')}*\n")
-    lines.append("| Service | Status | Latency | Info |")
-    lines.append("|---------|--------|---------|------|")
-    for service, info in results.items():
-        lat = f"{info['latency_ms']} ms" if info["latency_ms"] is not None else "—"
-        detail = info["detail"] if params.verbose else ""
-        lines.append(f"| **{service}** | {info['status']} | {lat} | {detail} |")
-
-    all_up = all(v["status"].startswith("✅") for v in results.values())
-    lines.append(f"\n{'🟢 All systems operational.' if all_up else '🔴 One or more services down — check stderr logs.'}")
-    return "\n".join(lines)
+        return _format_error(e, "shanebrain_system_health")
 
 
 # ===========================================================================
-# TOOLS — GROUP 5: RAG Semantic Summary (Power tool — RAG + Ollama chained)
+# HTTP Health Endpoint (for Docker healthcheck / monitoring)
 # ===========================================================================
 
-class RagSummarizeInput(BaseModel):
-    model_config = ConfigDict(str_strip_whitespace=True, extra="forbid")
+@mcp.custom_route("/health", methods=["GET"])
+async def http_health(request: Request) -> JSONResponse:
+    """HTTP health endpoint for Docker healthcheck and monitoring."""
+    try:
+        with _weaviate() as h:
+            weaviate_ok = h.is_ready()
+    except Exception:
+        weaviate_ok = False
 
-    question: str = Field(
-        ...,
-        description="Question to answer using the knowledge base (e.g., 'What is the current Angel Cloud architecture?')",
-        min_length=5, max_length=500,
+    ollama_ok = check_ollama().get("status") == "ok"
+    healthy = weaviate_ok and ollama_ok
+
+    return JSONResponse(
+        status_code=200 if healthy else 503,
+        content={
+            "status": "healthy" if healthy else "degraded",
+            "weaviate": "ok" if weaviate_ok else "down",
+            "ollama": "ok" if ollama_ok else "down",
+            "version": "2.0.0",
+        },
     )
-    class_name: str = Field(default=WEAVIATE_KNOWLEDGE_CLASS, description="Weaviate class to search")
-    num_chunks: int = Field(default=3, ge=1, le=10, description="Number of RAG chunks to retrieve and synthesize")
-    model: str = Field(default=DEFAULT_MODEL, description="Ollama model for synthesis")
-    certainty: float = Field(default=0.65, ge=0.0, le=1.0)
-
-@mcp.tool(
-    name="shanebrain_rag_answer",
-    annotations={
-        "title": "Answer Question Using RAG + Local LLM",
-        "readOnlyHint": True,
-        "destructiveHint": False,
-        "idempotentHint": False,
-        "openWorldHint": False,
-    },
-)
-async def shanebrain_rag_answer(params: RagSummarizeInput, ctx: Context) -> str:
-    """Answer a question by retrieving relevant context from Weaviate and
-    synthesizing a response using the local Ollama LLM. This is the full
-    RAG pipeline — Retrieve → Augment → Generate — running 100% locally.
-
-    Pipeline: nearText search → inject context → Ollama generate → return answer.
-    No cloud calls. Complete privacy. Works offline over Tailscale.
-
-    Args:
-        params (RagSummarizeInput): question, class_name, num_chunks, model, certainty.
-
-    Returns:
-        str: Synthesized answer grounded in retrieved knowledge base content.
-    """
-    await ctx.report_progress(0.1, "Retrieving context from Weaviate...")
-    try:
-        # Step 1: RAG retrieval
-        gql = {
-            "query": f"""
-            {{
-              Get {{
-                {params.class_name}(
-                  nearText: {{ concepts: ["{params.question}"], certainty: {params.certainty} }}
-                  limit: {params.num_chunks}
-                ) {{
-                  _additional {{ certainty }}
-                  content
-                  source
-                  timestamp
-                }}
-              }}
-            }}
-            """
-        }
-        data = await _weaviate_post("/v1/graphql", gql)
-        chunks = data.get("data", {}).get("Get", {}).get(params.class_name, [])
-
-        if not chunks:
-            return (
-                f"No relevant context found in '{params.class_name}' for: '{params.question}' "
-                f"(certainty ≥ {params.certainty}). "
-                "Try storing relevant documents first with shanebrain_rag_store, "
-                "or lower the certainty threshold."
-            )
-
-        await ctx.report_progress(0.5, "Sending to local LLM...")
-        # Step 2: Build augmented prompt
-        context_block = "\n\n---\n\n".join(
-            f"[Source: {c.get('source', '?')} | {c.get('timestamp', '')[:10]}]\n{c.get('content', '')}"
-            for c in chunks
-        )
-        prompt = (
-            f"You are ShaneBrain, a local AI assistant. "
-            f"Answer the question using ONLY the provided context. "
-            f"If the context doesn't contain enough information, say so clearly.\n\n"
-            f"CONTEXT:\n{context_block}\n\n"
-            f"QUESTION: {params.question}\n\n"
-            f"ANSWER:"
-        )
-
-        # Step 3: Generate
-        result = await _ollama_post("/api/generate", {
-            "model": params.model,
-            "prompt": prompt,
-            "stream": False,
-            "options": {"temperature": 0.3, "num_predict": 512},
-        })
-        await ctx.report_progress(0.95, "Done.")
-
-        answer = result.get("response", "").strip()
-        sources = ", ".join({c.get("source", "?") for c in chunks})
-        return (
-            f"## RAG Answer: {params.question}\n\n"
-            f"{answer}\n\n"
-            f"---\n"
-            f"*Grounded in {len(chunks)} chunks from `{params.class_name}` | "
-            f"Sources: {sources} | Model: `{params.model}` | Local inference*"
-        )
-
-    except Exception as e:
-        return _format_error(e, "shanebrain_rag_answer")
 
 
 # ===========================================================================
-# ENTRYPOINT
+# Entry point
 # ===========================================================================
 
 if __name__ == "__main__":
     import argparse
 
-    parser = argparse.ArgumentParser(description="ShaneBrain MCP Server")
-    parser.add_argument("--transport", choices=["streamable_http", "stdio"], default="streamable_http")
-    parser.add_argument("--port", type=int, default=MCP_PORT)
-    parser.add_argument("--host", default="0.0.0.0", help="Bind host (use 127.0.0.1 for local-only)")
+    parser = argparse.ArgumentParser(description="ShaneBrain MCP Server v2.0")
+    parser.add_argument("--transport", choices=["sse", "streamable-http", "stdio"], default="streamable-http")
     args = parser.parse_args()
 
-    logger.info("Starting ShaneBrain MCP | transport=%s | port=%s", args.transport, args.port)
+    logger.info("Starting ShaneBrain MCP v2.0 | transport=%s | port=%s | 27 tools", args.transport, MCP_PORT)
 
-    if args.transport == "streamable_http":
-        mcp.run(transport="streamable_http", port=args.port, host=args.host)
-    else:
-        mcp.run()  # stdio
+    mcp.run(transport=args.transport)
