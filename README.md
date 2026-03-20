@@ -214,3 +214,16 @@ pass/fail counts. Slow tools (RAG chat, briefing, draft generation) are skipped.
 Note: The production deployment also uses `weaviate_bridge.py` and `health.py`
 as local imports. Those modules live in the Pi deployment at
 `/mnt/shanebrain-raid/shanebrain-core/mcp-server/`.
+
+
+---
+
+## Support This Work
+
+If what I'm building matters to you — local AI for real people, tools for the left-behind — here's how to help:
+
+- **[Sponsor me on GitHub](https://github.com/sponsors/thebardchat)**
+- **[Buy the book](https://www.amazon.com/Probably-Think-This-Book-About/dp/B0GT25R5FD)** — *You Probably Think This Book Is About You*
+- **Star the repos** — visibility matters for projects like this
+
+Built by **Shane Brazelton** · Co-built with **Claude** (Anthropic) · Hazel Green, Alabama
