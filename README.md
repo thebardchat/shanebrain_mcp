@@ -1,3 +1,7 @@
+<div align="center"><img src=".github/assets/banner.png" alt="ShaneBrain MCP" width="100%"></div>
+
+[![Constitution](https://img.shields.io/badge/Constitution-ShaneTheBrain-blue)](https://github.com/thebardchat/constitution)
+
 # ShaneBrain MCP Server v2.0
 
 > Production-grade Model Context Protocol server for the ShaneBrain Pi 5 stack.
@@ -216,6 +220,28 @@ as local imports. Those modules live in the Pi deployment at
 `/mnt/shanebrain-raid/shanebrain-core/mcp-server/`.
 
 
+## Built With
+
+<table>
+  <tr>
+    <td align="center" width="200">
+      <b>Claude by Anthropic</b><br/>
+      <sub>AI partner and co-builder.</sub><br/><br/>
+      <a href="https://claude.ai"><code>claude.ai</code></a>
+    </td>
+    <td align="center" width="200">
+      <b>Raspberry Pi 5</b><br/>
+      <sub>Local AI compute node.</sub><br/><br/>
+      <a href="https://www.raspberrypi.com"><code>raspberrypi.com</code></a>
+    </td>
+    <td align="center" width="200">
+      <b>Pironman 5-MAX</b><br/>
+      <sub>NVMe RAID 1 chassis by Sunfounder.</sub><br/><br/>
+      <a href="https://www.sunfounder.com"><code>sunfounder.com</code></a>
+    </td>
+  </tr>
+</table>
+
 ---
 
 ## Support This Work
@@ -227,3 +253,11 @@ If what I'm building matters to you — local AI for real people, tools for the 
 - **Star the repos** — visibility matters for projects like this
 
 Built by **Shane Brazelton** · Co-built with **Claude** (Anthropic) · Hazel Green, Alabama
+
+---
+
+<div align="center">
+
+*Part of the [ShaneBrain Ecosystem](https://github.com/thebardchat) · Built under the [Constitution](https://github.com/thebardchat/constitution)*
+
+</div>
