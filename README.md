@@ -5,7 +5,7 @@
 # ShaneBrain MCP Server v2.0
 
 > Production-grade Model Context Protocol server for the ShaneBrain Pi 5 stack.
-> 27 tools across 12 groups. FastMCP + Weaviate RAG + Ollama + Planning System.
+> 42 tools across 12 groups. FastMCP + Weaviate RAG + Ollama + Planning System.
 
 ---
 
@@ -76,7 +76,7 @@ Or add to `~/.claude/mcp_servers.json`:
 
 ---
 
-## Tools Reference (27 tools, 12 groups)
+## Tools Reference (42 tools, 12 groups)
 
 ### Group 1 -- Knowledge (2)
 
@@ -183,7 +183,7 @@ JSON-RPC, and `/health` returns service status (HTTP 200 healthy, 503 degraded).
 ## Quality
 
 - Pydantic v2 `BaseModel` with `Field` constraints on every tool input
-- MCP annotations (`readOnlyHint`, `destructiveHint`, `idempotentHint`, `openWorldHint`) on all 27 tools
+- MCP annotations (`readOnlyHint`, `destructiveHint`, `idempotentHint`, `openWorldHint`) on all 42 tools
 - Actionable error messages with next-step suggestions
 - Logging to stderr only (never pollutes MCP stdout)
 - Async throughout, no blocking I/O
@@ -212,7 +212,7 @@ pass/fail counts. Slow tools (RAG chat, briefing, draft generation) are skipped.
 
 | File | Purpose |
 |------|---------|
-| `shanebrain_mcp.py` | Main server (all 27 tools + health endpoint + lifespan) |
+| `shanebrain_mcp.py` | Main server (all 42 tools + health endpoint + lifespan) |
 | `test_smoke.py` | Smoke test suite for all tool groups |
 
 Note: The production deployment also uses `weaviate_bridge.py` and `health.py`
