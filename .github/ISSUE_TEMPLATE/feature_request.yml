@@ -1,0 +1,103 @@
+name: ✨ Feature Request
+description: Pitch a new feature, capability, or ecosystem integration.
+title: "[FEAT] "
+labels: ["enhancement", "needs-triage"]
+assignees:
+  - thebardchat
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Mission reminder: every feature should serve the chain →
+        **ShaneBrain → Angel Cloud → Pulsar AI → TheirNameBrain → 800M users**.
+        If it doesn't, pitch it anyway — but tell me why.
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: 🎯 What problem does this solve?
+      description: Real friction you (or a user) hit. No solutions yet — just the problem.
+      placeholder: "Right now, X forces me to do Y manually every time..."
+    validations:
+      required: true
+
+  - type: textarea
+    id: solution
+    attributes:
+      label: 💡 Proposed solution
+      description: How would you build it? File structure first if you've got it.
+    validations:
+      required: true
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: 🔀 Alternatives considered
+      description: What did you think about and reject? Why?
+    validations:
+      required: false
+
+  - type: dropdown
+    id: ecosystem-layer
+    attributes:
+      label: 🧠 Which layer does this live in?
+      options:
+        - ShaneBrain (Pi 5 / local AI)
+        - Angel Cloud (VPS / public)
+        - Pulsar AI (post-quantum / N8N)
+        - TheirNameBrain (legacy AI)
+        - mega-dashboard / frontend
+        - Halo Finance
+        - Claim Cruncher
+        - SRM Dispatch
+        - AI-Trainer-MAX
+        - Cross-cutting (touches multiple layers)
+        - New layer / new repo
+    validations:
+      required: true
+
+  - type: dropdown
+    id: priority
+    attributes:
+      label: 🔥 Priority signal
+      description: Honest gut check.
+      options:
+        - 🚨 Blocking — can't ship without it
+        - ⚡ High — should be in next sprint
+        - 🟡 Medium — nice to have soon
+        - 🟢 Low — future / backlog
+        - 🧪 Experimental — exploring the idea
+    validations:
+      required: true
+
+  - type: textarea
+    id: success
+    attributes:
+      label: ✅ Definition of done
+      description: How do we know it's working? Checkboxes preferred.
+      value: |
+        - [ ]
+        - [ ]
+        - [ ]
+    validations:
+      required: false
+
+  - type: textarea
+    id: context
+    attributes:
+      label: 🗒️ Additional context
+      description: Mockups, links, related issues, prior art.
+    validations:
+      required: false
+
+  - type: checkboxes
+    id: checklist
+    attributes:
+      label: ☑️ Pre-submit checklist
+      options:
+        - label: I searched existing issues — this isn't a duplicate
+          required: true
+        - label: This aligns with the ecosystem mission (or I explained why it's a detour worth taking)
+          required: true
+        - label: I'm willing to help build / test it
+          required: false

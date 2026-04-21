@@ -1,0 +1,14 @@
+blank_issues_enabled: false
+contact_links:
+  - name: 💬 Questions & Discussions
+    url: https://github.com/thebardchat/discussions
+    about: Got a question, idea, or want to brainstorm? Start a discussion instead of an issue.
+  - name: 🔐 Security / Sensitive Disclosure
+    url: https://github.com/thebardchat/.github/security/advisories/new
+    about: Found a security issue? Report it privately — don't open a public issue.
+  - name: 📚 AI-Trainer-MAX (Learning Resources)
+    url: https://github.com/thebardchat/AI-Trainer-MAX
+    about: New to the local-AI stack? Start here before filing.
+  - name: 🌐 Black Crab Park
+    url: https://github.com/thebardchat
+    about: The wider ecosystem — ShaneBrain, Angel Cloud, Pulsar AI, TheirNameBrain.

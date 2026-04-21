@@ -1,0 +1,128 @@
+name: 🐛 Bug Report
+description: Something in the ecosystem isn't working right.
+title: "[BUG] "
+labels: ["bug", "needs-triage"]
+assignees:
+  - thebardchat
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for filing this. Be specific — I'd rather have one detailed report than ten vague ones.
+        Voice-to-text is fine; transcription errors won't be held against you.
+
+  - type: textarea
+    id: description
+    attributes:
+      label: 🐛 What's broken?
+      description: Plain English, one or two sentences. What were you doing, what blew up?
+      placeholder: "Tried to run X, got Y instead of Z."
+    validations:
+      required: true
+
+  - type: textarea
+    id: repro
+    attributes:
+      label: 🔁 How do I reproduce it?
+      description: Numbered steps. Pretend I've never seen this repo before.
+      value: |
+        1. Go to '...'
+        2. Run '...'
+        3. See error
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: ✅ What should happen?
+      placeholder: "X should return Y."
+    validations:
+      required: true
+
+  - type: textarea
+    id: actual
+    attributes:
+      label: ❌ What actually happens?
+      description: Paste full errors, stack traces, or systemd journal output. Don't trim it.
+      render: shell
+    validations:
+      required: true
+
+  - type: dropdown
+    id: ecosystem-layer
+    attributes:
+      label: 🧠 Which layer of the ecosystem?
+      description: Helps me know which brain this belongs to.
+      options:
+        - ShaneBrain (Pi 5 / local AI)
+        - Angel Cloud (VPS / public)
+        - Pulsar AI (post-quantum / N8N)
+        - TheirNameBrain (legacy AI)
+        - mega-dashboard / frontend
+        - Halo Finance
+        - Claim Cruncher
+        - SRM Dispatch
+        - AI-Trainer-MAX
+        - Other / not sure
+    validations:
+      required: true
+
+  - type: dropdown
+    id: host
+    attributes:
+      label: 🖥️ Where did it happen?
+      options:
+        - shanebrain-1 (Pi 5)
+        - Pulsar0100 (Windows)
+        - laptop-ts6v7fna
+        - bullfrog-max-r2d2
+        - VPS / Angel Cloud
+        - Browser (GitHub Pages)
+        - Other
+    validations:
+      required: true
+
+  - type: textarea
+    id: environment
+    attributes:
+      label: 🛠️ Environment details
+      description: OS, browser, model name, Ollama/Weaviate version — whatever's relevant.
+      value: |
+        - OS:
+        - Browser / runtime:
+        - Version / commit SHA:
+        - Hardware notes:
+    validations:
+      required: false
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: 📋 Logs / screenshots
+      description: Drag-drop images. Paste logs in the code block below.
+      render: shell
+    validations:
+      required: false
+
+  - type: textarea
+    id: context
+    attributes:
+      label: 🗒️ Anything else?
+      description: Recent changes, related issues, workarounds tried.
+    validations:
+      required: false
+
+  - type: checkboxes
+    id: checklist
+    attributes:
+      label: ☑️ Pre-submit checklist
+      options:
+        - label: I searched existing issues — this isn't a duplicate
+          required: true
+        - label: I'm on the latest commit / release
+          required: true
+        - label: I included repro steps
+          required: true
+        - label: I included logs or screenshots where it matters
+          required: false
