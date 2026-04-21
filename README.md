@@ -4,6 +4,12 @@
 
 # ShaneBrain MCP Server v2.0
 
+> **Try Claude free for 2 weeks** — the AI behind this entire ecosystem. [Start your free trial →](https://claude.ai/referral/4fAMYN9Ing)
+
+---
+
+
+
 > Production-grade Model Context Protocol server for the ShaneBrain Pi 5 stack.
 > 42 tools across 12 groups. FastMCP + Weaviate RAG + Ollama + Planning System.
 
