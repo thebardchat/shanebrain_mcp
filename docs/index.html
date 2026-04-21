@@ -1,0 +1,347 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta property="og:title" content="ShaneBrain MCP Server — 42 Tools">
+<meta property="og:description" content="Production MCP server: 42 tools across 12 groups. FastMCP + Weaviate + Ollama on Raspberry Pi 5.">
+<meta property="og:image" content="https://thebardchat.github.io/shanebrain_mcp/docs/social-card.svg">
+<title>ShaneBrain MCP Server v2.2</title>
+<style>
+  :root {
+    --bg: #0a0514;
+    --bg2: #0e0820;
+    --cyan: #00e5ff;
+    --purple: #a855f7;
+    --purple2: #7c3aed;
+    --text: #e2e8f0;
+    --muted: #94a3b8;
+    --card: #12082a;
+    --border: #2d1b69;
+    --accent: #f59e0b;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: 'Segoe UI', system-ui, sans-serif;
+    line-height: 1.6;
+    min-height: 100vh;
+  }
+  canvas#particles {
+    position: fixed; top: 0; left: 0; width: 100%; height: 100%;
+    pointer-events: none; z-index: 0; opacity: 0.4;
+  }
+  .content { position: relative; z-index: 1; }
+
+  /* Referral banner */
+  .ref-banner {
+    background: linear-gradient(90deg, #1a0a3a, #0d1b3e, #1a0a3a);
+    border-bottom: 1px solid var(--border);
+    padding: 0.7rem 1.5rem;
+    text-align: center;
+    font-size: 0.85rem;
+  }
+  .ref-banner a { color: var(--cyan); text-decoration: none; font-weight: 600; }
+  .ref-banner a:hover { text-decoration: underline; }
+
+  header {
+    padding: 4rem 2rem 3rem;
+    text-align: center;
+    background: radial-gradient(ellipse at 50% 0%, #2d1b69 0%, transparent 70%);
+  }
+  .badge {
+    display: inline-block;
+    background: linear-gradient(90deg, var(--purple2), #4f46e5);
+    color: #fff;
+    font-size: 0.7rem;
+    font-weight: 700;
+    letter-spacing: 0.15em;
+    text-transform: uppercase;
+    padding: 0.25rem 0.75rem;
+    border-radius: 999px;
+    margin-bottom: 1.2rem;
+  }
+  h1 {
+    font-size: clamp(2rem, 5vw, 3.5rem);
+    font-weight: 800;
+    background: linear-gradient(135deg, #fff 30%, var(--cyan));
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    background-clip: text;
+    margin-bottom: 0.5rem;
+  }
+  .tagline { color: var(--muted); font-size: 1.1rem; margin-bottom: 1.5rem; }
+  .stats-row {
+    display: flex; gap: 2rem; justify-content: center; flex-wrap: wrap;
+    margin-bottom: 2rem;
+  }
+  .stat {
+    text-align: center;
+  }
+  .stat-num {
+    font-size: 2.5rem; font-weight: 800;
+    background: linear-gradient(135deg, var(--cyan), var(--purple));
+    -webkit-background-clip: text; -webkit-text-fill-color: transparent; background-clip: text;
+  }
+  .stat-label { font-size: 0.75rem; color: var(--muted); text-transform: uppercase; letter-spacing: 0.1em; }
+  .cta-row { display: flex; gap: 1rem; justify-content: center; flex-wrap: wrap; }
+  .btn {
+    display: inline-block; padding: 0.7rem 1.6rem; border-radius: 8px;
+    font-weight: 600; font-size: 0.9rem; text-decoration: none; transition: transform 0.15s, box-shadow 0.15s;
+  }
+  .btn:hover { transform: translateY(-2px); box-shadow: 0 8px 24px rgba(168,85,247,0.3); }
+  .btn-primary { background: linear-gradient(135deg, var(--purple2), #4f46e5); color: #fff; }
+  .btn-secondary { background: transparent; border: 1px solid var(--border); color: var(--cyan); }
+
+  main { max-width: 1100px; margin: 0 auto; padding: 2rem 1.5rem 6rem; }
+  h2 {
+    font-size: 1.4rem; color: var(--cyan); margin: 3rem 0 1.2rem;
+    border-bottom: 1px solid var(--border); padding-bottom: 0.5rem;
+  }
+
+  .tools-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+    gap: 1rem;
+  }
+  .group-card {
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 1.2rem;
+    transition: border-color 0.2s, box-shadow 0.2s;
+  }
+  .group-card:hover {
+    border-color: var(--purple);
+    box-shadow: 0 0 20px rgba(168,85,247,0.15);
+  }
+  .group-title {
+    font-size: 0.8rem; font-weight: 700; letter-spacing: 0.1em; text-transform: uppercase;
+    color: var(--cyan); margin-bottom: 0.8rem;
+    display: flex; align-items: center; gap: 0.5rem;
+  }
+  .group-icon { font-size: 1rem; }
+  .tool-list { list-style: none; }
+  .tool-list li {
+    font-size: 0.78rem; color: var(--muted); padding: 0.3rem 0;
+    border-bottom: 1px solid rgba(45,27,105,0.4);
+    display: flex; align-items: flex-start; gap: 0.5rem;
+  }
+  .tool-list li:last-child { border-bottom: none; }
+  .tool-name { color: var(--text); font-family: monospace; flex-shrink: 0; }
+  .tool-desc { color: var(--muted); }
+
+  .stack-section { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px,1fr)); gap: 1rem; }
+  .stack-card {
+    background: var(--card); border: 1px solid var(--border); border-radius: 10px;
+    padding: 1rem 1.2rem;
+  }
+  .stack-card h3 { color: var(--purple); font-size: 0.9rem; margin-bottom: 0.3rem; }
+  .stack-card p { color: var(--muted); font-size: 0.8rem; }
+
+  footer {
+    text-align: center; color: var(--muted); font-size: 0.8rem;
+    padding: 2rem 1rem 5rem;
+  }
+  footer a { color: var(--cyan); text-decoration: none; }
+</style>
+</head>
+<body>
+<canvas id="particles"></canvas>
+<div class="content">
+
+<div class="ref-banner">
+  <strong>Try Claude free for 2 weeks</strong> — the AI behind this entire ecosystem.&nbsp;
+  <a href="https://claude.ai/referral/4fAMYN9Ing" target="_blank" rel="noopener">Start your free trial &rarr;</a>
+</div>
+
+<header>
+  <div class="badge">Production · Pi 5 · FastMCP</div>
+  <h1>ShaneBrain MCP Server</h1>
+  <p class="tagline">42 tools. Local AI. No cloud required.</p>
+  <div class="stats-row">
+    <div class="stat"><div class="stat-num">42</div><div class="stat-label">Tools</div></div>
+    <div class="stat"><div class="stat-num">12</div><div class="stat-label">Groups</div></div>
+    <div class="stat"><div class="stat-num">17</div><div class="stat-label">Weaviate Collections</div></div>
+    <div class="stat"><div class="stat-num">8100</div><div class="stat-label">Port</div></div>
+  </div>
+  <div class="cta-row">
+    <a class="btn btn-primary" href="https://github.com/thebardchat/shanebrain_mcp">View on GitHub</a>
+    <a class="btn btn-secondary" href="https://github.com/thebardchat">thebardchat &rarr;</a>
+  </div>
+</header>
+
+<main>
+  <h2>Tool Groups</h2>
+  <div class="tools-grid">
+
+    <div class="group-card">
+      <div class="group-title"><span class="group-icon">🧠</span> Knowledge (2)</div>
+      <ul class="tool-list">
+        <li><span class="tool-name">search_knowledge</span><span class="tool-desc">Semantic search across LegacyKnowledge RAG</span></li>
+        <li><span class="tool-name">add_knowledge</span><span class="tool-desc">Store new knowledge with category and source</span></li>
+      </ul>
+    </div>
+
+    <div class="group-card">
+      <div class="group-title"><span class="group-icon">💬</span> Chat (3)</div>
+      <ul class="tool-list">
+        <li><span class="tool-name">search_conversations</span><span class="tool-desc">Semantic search across conversation history</span></li>
+        <li><span class="tool-name">log_conversation</span><span class="tool-desc">Log a message to the Conversation collection</span></li>
+        <li><span class="tool-name">get_conversation_history</span><span class="tool-desc">Retrieve conversation by session ID</span></li>
+      </ul>
+    </div>
+
+    <div class="group-card">
+      <div class="group-title"><span class="group-icon">⚡</span> RAG Chat (1)</div>
+      <ul class="tool-list">
+        <li><span class="tool-name">chat</span><span class="tool-desc">Full RAG pipeline: search knowledge + Ollama generate</span></li>
+      </ul>
+    </div>
+
+    <div class="group-card">
+      <div class="group-title"><span class="group-icon">👥</span> Social (2)</div>
+      <ul class="tool-list">
+        <li><span class="tool-name">search_friends</span><span class="tool-desc">Semantic search across FriendProfile</span></li>
+        <li><span class="tool-name">get_top_friends</span><span class="tool-desc">List friends sorted by interaction count</span></li>
+      </ul>
+    </div>
+
+    <div class="group-card">
+      <div class="group-title"><span class="group-icon">🔐</span> Vault (3)</div>
+      <ul class="tool-list">
+        <li><span class="tool-name">vault_search</span><span class="tool-desc">Search PersonalDoc (medical, legal, financial)</span></li>
+        <li><span class="tool-name">vault_add</span><span class="tool-desc">Store a new vault document with category and tags</span></li>
+        <li><span class="tool-name">vault_list_categories</span><span class="tool-desc">List all vault categories with document counts</span></li>
+      </ul>
+    </div>
+
+    <div class="group-card">
+      <div class="group-title"><span class="group-icon">📓</span> Notes (3)</div>
+      <ul class="tool-list">
+        <li><span class="tool-name">daily_note_add</span><span class="tool-desc">Add a journal entry, todo, or reminder</span></li>
+        <li><span class="tool-name">daily_note_search</span><span class="tool-desc">Semantic search across DailyNote</span></li>
+        <li><span class="tool-name">daily_briefing</span><span class="tool-desc">Generate today's briefing via Ollama</span></li>
+      </ul>
+    </div>
+
+    <div class="group-card">
+      <div class="group-title"><span class="group-icon">✍️</span> Drafts (2)</div>
+      <ul class="tool-list">
+        <li><span class="tool-name">draft_create</span><span class="tool-desc">AI-generate a draft (email, post, letter) with vault context</span></li>
+        <li><span class="tool-name">draft_search</span><span class="tool-desc">Search saved drafts by topic or type</span></li>
+      </ul>
+    </div>
+
+    <div class="group-card">
+      <div class="group-title"><span class="group-icon">🛡️</span> Security (3)</div>
+      <ul class="tool-list">
+        <li><span class="tool-name">security_log_search</span><span class="tool-desc">Semantic search across SecurityLog</span></li>
+        <li><span class="tool-name">security_log_recent</span><span class="tool-desc">Recent security events filterable by severity</span></li>
+        <li><span class="tool-name">privacy_audit_search</span><span class="tool-desc">Search PrivacyAudit records</span></li>
+      </ul>
+    </div>
+
+    <div class="group-card">
+      <div class="group-title"><span class="group-icon">🗄️</span> Weaviate Admin (2)</div>
+      <ul class="tool-list">
+        <li><span class="tool-name">rag_list_classes</span><span class="tool-desc">List all Weaviate collections with object counts</span></li>
+        <li><span class="tool-name">rag_delete</span><span class="tool-desc">Delete a Weaviate object by collection + UUID</span></li>
+      </ul>
+    </div>
+
+    <div class="group-card">
+      <div class="group-title"><span class="group-icon">🤖</span> Ollama (2)</div>
+      <ul class="tool-list">
+        <li><span class="tool-name">ollama_generate</span><span class="tool-desc">Prompt the local LLM with optional system prompt</span></li>
+        <li><span class="tool-name">ollama_list_models</span><span class="tool-desc">List downloaded Ollama models with sizes</span></li>
+      </ul>
+    </div>
+
+    <div class="group-card">
+      <div class="group-title"><span class="group-icon">📋</span> Planning (3)</div>
+      <ul class="tool-list">
+        <li><span class="tool-name">plan_list</span><span class="tool-desc">List markdown files in a planning subfolder</span></li>
+        <li><span class="tool-name">plan_read</span><span class="tool-desc">Read a planning file's full content</span></li>
+        <li><span class="tool-name">plan_write</span><span class="tool-desc">Create or append to a planning file</span></li>
+      </ul>
+    </div>
+
+    <div class="group-card">
+      <div class="group-title"><span class="group-icon">💻</span> System (1)</div>
+      <ul class="tool-list">
+        <li><span class="tool-name">system_health</span><span class="tool-desc">Ping Weaviate, Ollama, Gateway — return latency dashboard</span></li>
+      </ul>
+    </div>
+
+  </div>
+
+  <h2>Stack</h2>
+  <div class="stack-section">
+    <div class="stack-card"><h3>FastMCP</h3><p>Streamable HTTP on port 8100. MCP JSON-RPC at /mcp, health at /health.</p></div>
+    <div class="stack-card"><h3>Weaviate 1.36.2</h3><p>17 collections, nomic-embed-text 768-dim vectors, Docker on shanebrain-network.</p></div>
+    <div class="stack-card"><h3>Ollama 0.17.7</h3><p>Local inference — shanebrain-3b, llama3.2:3b, 4-node cluster proxy on port 11435.</p></div>
+    <div class="stack-card"><h3>Raspberry Pi 5</h3><p>16 GB RAM, 2x 2TB NVMe RAID 1, running everything local-first.</p></div>
+    <div class="stack-card"><h3>Pydantic v2</h3><p>All 42 tool inputs validated. MCP annotations on every tool.</p></div>
+    <div class="stack-card"><h3>Claude Integration</h3><p>Register with: claude mcp add --scope user shanebrain --transport http http://localhost:8100/mcp</p></div>
+  </div>
+
+</main>
+
+<footer>
+  <p>Built by <strong>Shane Brazelton + Claude Anthropic</strong> &middot; GPL v3 &middot; Hazel Green, AL</p>
+  <p><a href="https://github.com/thebardchat">github.com/thebardchat</a></p>
+</footer>
+
+</div>
+
+<!-- Sticky referral bar -->
+<div style="position:fixed;bottom:0;left:0;right:0;z-index:999;background:linear-gradient(90deg,#060910,#0b1124,#060910);border-top:1px solid #1e3060;padding:0.6rem 1.5rem;display:flex;align-items:center;justify-content:center;gap:1.2rem;font-family:monospace;font-size:0.65rem;letter-spacing:0.15em;text-transform:uppercase;"><span style="width:7px;height:7px;border-radius:50%;background:#f59e0b;box-shadow:0 0 8px #f59e0b;display:inline-block;"></span><span style="color:#3d5a78;">Try Claude free for 2 weeks —</span><a href="https://claude.ai/referral/4fAMYN9Ing" target="_blank" rel="noopener" style="color:#00b4d8;text-decoration:none;">Start your free trial →</a><span style="color:#3d5a78;">· AI behind this ecosystem</span></div>
+
+<script>
+const canvas = document.getElementById('particles');
+const ctx = canvas.getContext('2d');
+let W, H, particles = [];
+function resize() { W = canvas.width = innerWidth; H = canvas.height = innerHeight; }
+resize(); window.addEventListener('resize', resize);
+for (let i = 0; i < 80; i++) {
+  particles.push({
+    x: Math.random() * 9999, y: Math.random() * 9999,
+    vx: (Math.random() - 0.5) * 0.4, vy: (Math.random() - 0.5) * 0.4,
+    r: Math.random() * 1.5 + 0.3,
+    color: Math.random() > 0.5 ? '#a855f7' : '#00e5ff'
+  });
+}
+function draw() {
+  ctx.clearRect(0, 0, W, H);
+  particles.forEach(p => {
+    p.x = ((p.x + p.vx + W) % W);
+    p.y = ((p.y + p.vy + H) % H);
+    ctx.beginPath();
+    ctx.arc(p.x, p.y, p.r, 0, Math.PI * 2);
+    ctx.fillStyle = p.color;
+    ctx.fill();
+  });
+  // Draw lines between close particles
+  for (let i = 0; i < particles.length; i++) {
+    for (let j = i + 1; j < particles.length; j++) {
+      const dx = particles[i].x - particles[j].x;
+      const dy = particles[i].y - particles[j].y;
+      const d = Math.sqrt(dx*dx + dy*dy);
+      if (d < 120) {
+        ctx.beginPath();
+        ctx.moveTo(particles[i].x, particles[i].y);
+        ctx.lineTo(particles[j].x, particles[j].y);
+        ctx.strokeStyle = `rgba(168,85,247,${0.15 * (1 - d/120)})`;
+        ctx.lineWidth = 0.5;
+        ctx.stroke();
+      }
+    }
+  }
+  requestAnimationFrame(draw);
+}
+draw();
+</script>
+</body>
+</html>
