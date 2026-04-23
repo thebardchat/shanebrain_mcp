@@ -47,7 +47,7 @@ logger = logging.getLogger("shanebrain_mcp")
 # ---------------------------------------------------------------------------
 OLLAMA_HOST = os.environ.get("OLLAMA_HOST", "http://localhost:11434")
 OLLAMA_MODEL = os.environ.get("OLLAMA_MODEL", "shanebrain-3b:latest")
-PLANNING_DIR = Path(os.environ.get("PLANNING_DIR", "/mnt/shanebrain-raid/shanebrain-core/planning-system"))
+PLANNING_DIR = Path(os.environ.get("PLANNING_DIR", "/app/planning"))
 MCP_PORT = int(os.environ.get("MCP_PORT", "8100"))
 RAG_CHUNK_LIMIT = 5
 
@@ -138,11 +138,17 @@ async def lifespan(app: FastMCP):
             logger.warning("Ollama: NOT ready")
     except Exception as e:
         logger.warning("Ollama: NOT reachable (%s)", e)
-    # Ensure planning dirs
+    # Ensure planning dirs — MUST be mounted as a volume in Docker, not just a host path
     PLANNING_DIR.mkdir(parents=True, exist_ok=True)
     for sub in ("active-projects", "templates", "completed", "logs"):
         (PLANNING_DIR / sub).mkdir(exist_ok=True)
     logger.info("Planning dir: %s", PLANNING_DIR)
+    if str(PLANNING_DIR).startswith("/mnt/"):
+        logger.warning(
+            "PLANNING_DIR is a host path (%s) — plans will be LOST on container restart "
+            "unless this path is mounted via -v. See docker-compose.yml.",
+            PLANNING_DIR,
+        )
     yield {}
     logger.info("ShaneBrain MCP shutting down.")
 
@@ -728,13 +734,16 @@ def shanebrain_security_log_recent(params: SecurityLogRecentInput) -> str:
             if not h.collection_exists("SecurityLog"):
                 return json.dumps({"results": [], "message": "SecurityLog collection does not exist yet."})
             collection = h.client.collections.get("SecurityLog")
+            from weaviate.classes.query import Sort
+            sort = Sort.by_creation_time(ascending=False)
             if params.severity:
                 response = collection.query.fetch_objects(
                     filters=Filter.by_property("severity").equal(params.severity),
+                    sort=sort,
                     limit=params.limit,
                 )
             else:
-                response = collection.query.fetch_objects(limit=params.limit)
+                response = collection.query.fetch_objects(sort=sort, limit=params.limit)
             results = [obj.properties for obj in response.objects]
             return json.dumps({"results": results, "count": len(results)}, default=str)
     except Exception as e:
@@ -1172,7 +1181,12 @@ def _gcal_service():
     if creds.expired and creds.refresh_token:
         creds.refresh(Request())
         data["token"] = creds.token
-        GCAL_TOKEN_PATH.write_text(json.dumps(data, indent=2))
+        try:
+            GCAL_TOKEN_PATH.write_text(json.dumps(data, indent=2))
+        except (PermissionError, OSError) as write_err:
+            # Token file may be mounted read-only — refresh succeeded in memory,
+            # API calls will work but next startup will refresh again.
+            logger.warning("Could not persist refreshed token (%s). Mount rw to persist.", write_err)
 
     return build("calendar", "v3", credentials=creds, cache_discovery=False)
 
@@ -1464,7 +1478,7 @@ if __name__ == "__main__":
     # Suppress benign ResourceWarning from anyio/MCP framework
     warnings.filterwarnings("ignore", category=ResourceWarning, module="anyio")
 
-    parser = argparse.ArgumentParser(description="ShaneBrain MCP Server v2.0")
+    parser = argparse.ArgumentParser(description="ShaneBrain MCP Server v2.3")
     parser.add_argument("--transport", choices=["sse", "streamable-http", "stdio"], default="streamable-http")
     args = parser.parse_args()
 

@@ -1,0 +1,50 @@
+version: "3.9"
+
+# Build context must be the shanebrain-core root so weaviate_helpers.py is available.
+# Run from: /mnt/shanebrain-raid/shanebrain-core/
+#
+#   docker compose -f mcp-server/docker-compose.yml up -d --build
+#
+# Or from this repo's root (standalone — requires scripts/weaviate_helpers.py):
+#
+#   docker compose up -d --build
+
+services:
+  shanebrain-mcp:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: shanebrain-mcp:latest
+    container_name: shanebrain-mcp
+
+    # Host network so the container can reach Weaviate (8080), Ollama (11434),
+    # and the Angel Cloud gateway (4200) without extra port forwarding.
+    network_mode: host
+
+    restart: unless-stopped
+
+    environment:
+      # Required — set in .env or export before running
+      GMAIL_APP_PASSWORD: ${GMAIL_APP_PASSWORD}
+
+      # Optional overrides (defaults shown)
+      OLLAMA_HOST: ${OLLAMA_HOST:-http://localhost:11434}
+      OLLAMA_MODEL: ${OLLAMA_MODEL:-shanebrain-3b:latest}
+      MCP_PORT: ${MCP_PORT:-8100}
+      GCAL_TOKEN_PATH: ${GCAL_TOKEN_PATH:-/app/gcal_token.json}
+      GCAL_CALENDAR_ID: ${GCAL_CALENDAR_ID:-primary}
+      PLANNING_DIR: ${PLANNING_DIR:-/app/planning}
+
+    volumes:
+      # Google Calendar token — read-write so refreshed tokens persist
+      - /mnt/shanebrain-raid/shanebrain-core/scripts/gcal_token.json:/app/gcal_token.json:rw
+
+      # Planning system — MUST be mounted or plans are lost on restart
+      - /mnt/shanebrain-raid/shanebrain-core/planning-system:/app/planning:rw
+
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8100/health', timeout=5)"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 15s
