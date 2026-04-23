@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
 """
-ShaneBrain MCP Server v2.0
+ShaneBrain MCP Server v2.3
 ===========================
-27 tools across 12 groups — merged from Pi deployment + GitHub quality patterns.
+34 tools across 14 groups — merged from Pi deployment + GitHub quality patterns.
 
 Groups: Knowledge (2), Chat (3), RAG Chat (1), Social (2), Vault (3),
         Notes (3), Drafts (2), Security (3), Weaviate Admin (2),
-        Ollama (2), Planning (3), System (1)
+        Ollama (2), Planning (3), System (1), Email (2), Calendar (5)
 
 Transport: SSE on port 8100 (Docker), switchable to streamable_http via --transport
 Quality:   Pydantic v2 validation, MCP annotations, actionable errors, stderr logging
@@ -119,7 +119,7 @@ Be direct. Be brief. Be accurate."""
 
 @asynccontextmanager
 async def lifespan(app: FastMCP):
-    logger.info("ShaneBrain MCP v2.0 starting — 27 tools, 12 groups")
+    logger.info("ShaneBrain MCP v2.3 starting — 34 tools, 14 groups")
     # Check Weaviate
     try:
         with _weaviate() as h:
@@ -1055,6 +1055,378 @@ def shanebrain_system_health() -> str:
 
 
 # ===========================================================================
+# GROUP 13: Email — 2 tools (send + reply via Gmail SMTP)
+# ===========================================================================
+
+GMAIL_USER = "brazeltonshane@gmail.com"
+# Set GMAIL_APP_PASSWORD environment variable — never hardcode credentials
+GMAIL_APP_PASSWORD = os.environ.get("GMAIL_APP_PASSWORD", "")
+
+
+class EmailSendInput(BaseModel):
+    model_config = ConfigDict(str_strip_whitespace=True, extra="forbid")
+    to: str = Field(..., description="Recipient email address", min_length=5)
+    subject: str = Field(..., description="Email subject line", min_length=1)
+    body: str = Field(..., description="Email body (plain text or HTML)", min_length=1)
+    html: bool = Field(default=False, description="Set True to send as HTML email")
+
+
+class EmailReplyInput(BaseModel):
+    model_config = ConfigDict(str_strip_whitespace=True, extra="forbid")
+    to: str = Field(..., description="Recipient email address to reply to", min_length=5)
+    subject: str = Field(..., description="Email subject (usually 'Re: ...')", min_length=1)
+    body: str = Field(..., description="Reply body (plain text or HTML)", min_length=1)
+    html: bool = Field(default=False, description="Set True to send as HTML email")
+    in_reply_to: Optional[str] = Field(default=None, description="Message-ID header of the email being replied to")
+    references: Optional[str] = Field(default=None, description="References header for threading")
+
+
+def _send_email(to: str, subject: str, body: str, html: bool = False,
+                in_reply_to: str = None, references: str = None) -> dict:
+    """Internal helper to send email via Gmail SMTP."""
+    import smtplib
+    from email.mime.text import MIMEText
+    from email.mime.multipart import MIMEMultipart
+
+    if not GMAIL_APP_PASSWORD:
+        raise RuntimeError("GMAIL_APP_PASSWORD environment variable is not set.")
+
+    msg = MIMEMultipart("alternative")
+    msg["Subject"] = subject
+    msg["From"] = GMAIL_USER
+    msg["To"] = to
+    if in_reply_to:
+        msg["In-Reply-To"] = in_reply_to
+    if references:
+        msg["References"] = references
+
+    content_type = "html" if html else "plain"
+    msg.attach(MIMEText(body, content_type))
+
+    with smtplib.SMTP_SSL("smtp.gmail.com", 465) as server:
+        server.login(GMAIL_USER, GMAIL_APP_PASSWORD)
+        server.sendmail(GMAIL_USER, to, msg.as_string())
+
+    return {"sent": True, "to": to, "subject": subject}
+
+
+@mcp.tool(
+    name="shanebrain_send_email",
+    annotations={"readOnlyHint": False, "destructiveHint": False, "idempotentHint": False, "openWorldHint": True},
+)
+def shanebrain_send_email(params: EmailSendInput) -> str:
+    """Send an email from Shane's Gmail (brazeltonshane@gmail.com)."""
+    try:
+        result = _send_email(params.to, params.subject, params.body, params.html)
+        return json.dumps(result)
+    except Exception as e:
+        return _format_error(e, "shanebrain_send_email")
+
+
+@mcp.tool(
+    name="shanebrain_reply_email",
+    annotations={"readOnlyHint": False, "destructiveHint": False, "idempotentHint": False, "openWorldHint": True},
+)
+def shanebrain_reply_email(params: EmailReplyInput) -> str:
+    """Reply to an email from Shane's Gmail. Provide in_reply_to Message-ID for proper threading."""
+    try:
+        result = _send_email(
+            params.to, params.subject, params.body, params.html,
+            params.in_reply_to, params.references,
+        )
+        result["reply"] = True
+        return json.dumps(result)
+    except Exception as e:
+        return _format_error(e, "shanebrain_reply_email")
+
+
+# ===========================================================================
+# GROUP 14: Google Calendar — 5 tools (list, get, create, update, delete)
+# ===========================================================================
+
+GCAL_TOKEN_PATH = Path(os.environ.get("GCAL_TOKEN_PATH", "/app/gcal_token.json"))
+GCAL_CALENDAR_ID = os.environ.get("GCAL_CALENDAR_ID", "primary")
+
+
+def _gcal_service():
+    """Build an authenticated Google Calendar API service, auto-refreshing the token."""
+    from google.oauth2.credentials import Credentials
+    from google.auth.transport.requests import Request
+    from googleapiclient.discovery import build
+
+    if not GCAL_TOKEN_PATH.exists():
+        raise FileNotFoundError(
+            f"gcal_token.json not found at {GCAL_TOKEN_PATH}. "
+            "Run scripts/google_calendar_setup.py to authenticate."
+        )
+
+    data = json.loads(GCAL_TOKEN_PATH.read_text())
+    creds = Credentials(
+        token=data.get("token"),
+        refresh_token=data.get("refresh_token"),
+        token_uri=data.get("token_uri", "https://oauth2.googleapis.com/token"),
+        client_id=data.get("client_id"),
+        client_secret=data.get("client_secret"),
+        scopes=data.get("scopes", ["https://www.googleapis.com/auth/calendar.events"]),
+    )
+    if creds.expired and creds.refresh_token:
+        creds.refresh(Request())
+        data["token"] = creds.token
+        GCAL_TOKEN_PATH.write_text(json.dumps(data, indent=2))
+
+    return build("calendar", "v3", credentials=creds, cache_discovery=False)
+
+
+class CalendarListInput(BaseModel):
+    model_config = ConfigDict(str_strip_whitespace=True, extra="forbid")
+    days: int = Field(default=7, ge=1, le=90, description="Number of upcoming days to fetch (1-90)")
+    max_results: int = Field(default=20, ge=1, le=100, description="Max events to return")
+    calendar_id: Optional[str] = Field(default=None, description="Calendar ID (default: primary)")
+
+
+class CalendarGetInput(BaseModel):
+    model_config = ConfigDict(str_strip_whitespace=True, extra="forbid")
+    event_id: str = Field(..., description="Google Calendar event ID", min_length=1)
+    calendar_id: Optional[str] = Field(default=None, description="Calendar ID (default: primary)")
+
+
+class CalendarCreateInput(BaseModel):
+    model_config = ConfigDict(str_strip_whitespace=True, extra="forbid")
+    summary: str = Field(..., description="Event title", min_length=1)
+    start: str = Field(..., description="Start datetime in ISO 8601 (e.g. 2026-04-25T14:00:00) or date (2026-04-25)")
+    end: str = Field(default="", description="End datetime in ISO 8601 or date. Leave blank for 1-hour duration.")
+    description: Optional[str] = Field(default=None, description="Event description / notes")
+    location: Optional[str] = Field(default=None, description="Event location")
+    attendees: Optional[List[str]] = Field(default=None, description="List of attendee email addresses")
+    calendar_id: Optional[str] = Field(default=None, description="Calendar ID (default: primary)")
+    timezone: str = Field(default="America/Chicago", description="Timezone for the event")
+
+
+class CalendarUpdateInput(BaseModel):
+    model_config = ConfigDict(str_strip_whitespace=True, extra="forbid")
+    event_id: str = Field(..., description="Google Calendar event ID to update", min_length=1)
+    summary: Optional[str] = Field(default=None, description="New event title")
+    start: Optional[str] = Field(default=None, description="New start datetime ISO 8601")
+    end: Optional[str] = Field(default=None, description="New end datetime ISO 8601")
+    description: Optional[str] = Field(default=None, description="New description")
+    location: Optional[str] = Field(default=None, description="New location")
+    calendar_id: Optional[str] = Field(default=None, description="Calendar ID (default: primary)")
+    timezone: str = Field(default="America/Chicago", description="Timezone for updated times")
+
+
+class CalendarDeleteInput(BaseModel):
+    model_config = ConfigDict(str_strip_whitespace=True, extra="forbid")
+    event_id: str = Field(..., description="Google Calendar event ID to delete", min_length=1)
+    calendar_id: Optional[str] = Field(default=None, description="Calendar ID (default: primary)")
+
+
+def _parse_gcal_datetime(dt_str: str, tz: str, duration_hours: int = 1) -> tuple[dict, dict]:
+    """Return (start_body, end_body) for the Google Calendar API from an ISO string.
+
+    Always generates an end that is duration_hours after start. The caller
+    overrides end_body if the user supplied an explicit end parameter.
+    """
+    from datetime import timedelta, datetime as _dt
+
+    is_date_only = len(dt_str) == 10  # YYYY-MM-DD
+    if is_date_only:
+        # All-day events: end date is the next day (exclusive)
+        from datetime import date, timedelta as _td
+        start_date = date.fromisoformat(dt_str)
+        end_date = start_date + _td(days=1)
+        return {"date": dt_str}, {"date": end_date.isoformat()}
+
+    # Parse datetime string, handling both naive and aware variants
+    try:
+        start_dt = _dt.fromisoformat(dt_str)
+    except ValueError:
+        # Fallback: treat as-is and let Google reject invalid input
+        start_body = {"dateTime": dt_str, "timeZone": tz}
+        return start_body, start_body
+
+    end_dt = start_dt + timedelta(hours=duration_hours)
+
+    if "+" in dt_str or dt_str.endswith("Z"):
+        # Timezone-aware string — preserve offset, don't add timeZone field
+        start_body = {"dateTime": dt_str}
+        end_body = {"dateTime": end_dt.isoformat()}
+    else:
+        # Naive string — attach the provided timezone
+        start_body = {"dateTime": dt_str, "timeZone": tz}
+        end_body = {"dateTime": end_dt.isoformat(), "timeZone": tz}
+
+    return start_body, end_body
+
+
+@mcp.tool(
+    name="shanebrain_calendar_list",
+    annotations={"readOnlyHint": True, "destructiveHint": False, "idempotentHint": True, "openWorldHint": True},
+)
+def shanebrain_calendar_list(params: CalendarListInput) -> str:
+    """List upcoming Google Calendar events for the next N days."""
+    try:
+        from datetime import timedelta
+        service = _gcal_service()
+        cal_id = params.calendar_id or GCAL_CALENDAR_ID
+        now = datetime.now(timezone.utc)
+        time_max = now + timedelta(days=params.days)
+        result = service.events().list(
+            calendarId=cal_id,
+            timeMin=now.isoformat(),
+            timeMax=time_max.isoformat(),
+            maxResults=params.max_results,
+            singleEvents=True,
+            orderBy="startTime",
+        ).execute()
+        events = result.get("items", [])
+        simplified = []
+        for e in events:
+            simplified.append({
+                "id": e["id"],
+                "summary": e.get("summary", "(no title)"),
+                "start": e["start"].get("dateTime", e["start"].get("date")),
+                "end": e["end"].get("dateTime", e["end"].get("date")),
+                "location": e.get("location"),
+                "description": e.get("description"),
+            })
+        return json.dumps({"events": simplified, "count": len(simplified), "days": params.days})
+    except Exception as e:
+        return _format_error(e, "shanebrain_calendar_list")
+
+
+@mcp.tool(
+    name="shanebrain_calendar_get",
+    annotations={"readOnlyHint": True, "destructiveHint": False, "idempotentHint": True, "openWorldHint": True},
+)
+def shanebrain_calendar_get(params: CalendarGetInput) -> str:
+    """Get a specific Google Calendar event by ID."""
+    try:
+        service = _gcal_service()
+        cal_id = params.calendar_id or GCAL_CALENDAR_ID
+        event = service.events().get(calendarId=cal_id, eventId=params.event_id).execute()
+        return json.dumps({
+            "id": event["id"],
+            "summary": event.get("summary", "(no title)"),
+            "start": event["start"].get("dateTime", event["start"].get("date")),
+            "end": event["end"].get("dateTime", event["end"].get("date")),
+            "location": event.get("location"),
+            "description": event.get("description"),
+            "attendees": [a["email"] for a in event.get("attendees", [])],
+            "htmlLink": event.get("htmlLink"),
+            "status": event.get("status"),
+        })
+    except Exception as e:
+        return _format_error(e, "shanebrain_calendar_get")
+
+
+@mcp.tool(
+    name="shanebrain_calendar_create",
+    annotations={"readOnlyHint": False, "destructiveHint": False, "idempotentHint": False, "openWorldHint": True},
+)
+def shanebrain_calendar_create(params: CalendarCreateInput) -> str:
+    """Create a new Google Calendar event. Returns the created event ID and link."""
+    try:
+        service = _gcal_service()
+        cal_id = params.calendar_id or GCAL_CALENDAR_ID
+
+        start_body, auto_end = _parse_gcal_datetime(params.start, params.timezone)
+
+        if params.end and params.end.strip():
+            # Caller supplied explicit end — build the body directly
+            if "T" in params.end:
+                if "+" in params.end or params.end.endswith("Z"):
+                    end_body = {"dateTime": params.end}
+                else:
+                    end_body = {"dateTime": params.end, "timeZone": params.timezone}
+            else:
+                end_body = {"date": params.end}
+        else:
+            end_body = auto_end
+
+        body = {
+            "summary": params.summary,
+            "start": start_body,
+            "end": end_body,
+        }
+        if params.description:
+            body["description"] = params.description
+        if params.location:
+            body["location"] = params.location
+        if params.attendees:
+            body["attendees"] = [{"email": a} for a in params.attendees]
+
+        created = service.events().insert(calendarId=cal_id, body=body).execute()
+        return json.dumps({
+            "created": True,
+            "id": created["id"],
+            "summary": created.get("summary"),
+            "start": created["start"].get("dateTime", created["start"].get("date")),
+            "end": created["end"].get("dateTime", created["end"].get("date")),
+            "htmlLink": created.get("htmlLink"),
+        })
+    except Exception as e:
+        return _format_error(e, "shanebrain_calendar_create")
+
+
+@mcp.tool(
+    name="shanebrain_calendar_update",
+    annotations={"readOnlyHint": False, "destructiveHint": False, "idempotentHint": True, "openWorldHint": True},
+)
+def shanebrain_calendar_update(params: CalendarUpdateInput) -> str:
+    """Update an existing Google Calendar event. Only provided fields are changed."""
+    try:
+        service = _gcal_service()
+        cal_id = params.calendar_id or GCAL_CALENDAR_ID
+
+        # Fetch current event to patch
+        event = service.events().get(calendarId=cal_id, eventId=params.event_id).execute()
+
+        if params.summary:
+            event["summary"] = params.summary
+        if params.description is not None:
+            event["description"] = params.description
+        if params.location is not None:
+            event["location"] = params.location
+        if params.start:
+            if "T" in params.start:
+                event["start"] = {"dateTime": params.start, "timeZone": params.timezone}
+            else:
+                event["start"] = {"date": params.start}
+        if params.end:
+            if "T" in params.end:
+                event["end"] = {"dateTime": params.end, "timeZone": params.timezone}
+            else:
+                event["end"] = {"date": params.end}
+
+        updated = service.events().update(calendarId=cal_id, eventId=params.event_id, body=event).execute()
+        return json.dumps({
+            "updated": True,
+            "id": updated["id"],
+            "summary": updated.get("summary"),
+            "start": updated["start"].get("dateTime", updated["start"].get("date")),
+            "end": updated["end"].get("dateTime", updated["end"].get("date")),
+            "htmlLink": updated.get("htmlLink"),
+        })
+    except Exception as e:
+        return _format_error(e, "shanebrain_calendar_update")
+
+
+@mcp.tool(
+    name="shanebrain_calendar_delete",
+    annotations={"readOnlyHint": False, "destructiveHint": True, "idempotentHint": True, "openWorldHint": True},
+)
+def shanebrain_calendar_delete(params: CalendarDeleteInput) -> str:
+    """Delete a Google Calendar event by ID. This is permanent."""
+    try:
+        service = _gcal_service()
+        cal_id = params.calendar_id or GCAL_CALENDAR_ID
+        service.events().delete(calendarId=cal_id, eventId=params.event_id).execute()
+        return json.dumps({"deleted": True, "event_id": params.event_id})
+    except Exception as e:
+        return _format_error(e, "shanebrain_calendar_delete")
+
+
+# ===========================================================================
 # HTTP Health Endpoint (for Docker healthcheck / monitoring)
 # ===========================================================================
 
@@ -1076,7 +1448,7 @@ async def http_health(request: Request) -> JSONResponse:
             "status": "healthy" if healthy else "degraded",
             "weaviate": "ok" if weaviate_ok else "down",
             "ollama": "ok" if ollama_ok else "down",
-            "version": "2.0.0",
+            "version": "2.3.0",
         },
     )
 
@@ -1087,11 +1459,15 @@ async def http_health(request: Request) -> JSONResponse:
 
 if __name__ == "__main__":
     import argparse
+    import warnings
+
+    # Suppress benign ResourceWarning from anyio/MCP framework
+    warnings.filterwarnings("ignore", category=ResourceWarning, module="anyio")
 
     parser = argparse.ArgumentParser(description="ShaneBrain MCP Server v2.0")
     parser.add_argument("--transport", choices=["sse", "streamable-http", "stdio"], default="streamable-http")
     args = parser.parse_args()
 
-    logger.info("Starting ShaneBrain MCP v2.0 | transport=%s | port=%s | 27 tools", args.transport, MCP_PORT)
+    logger.info("Starting ShaneBrain MCP v2.3 | transport=%s | port=%s | 34 tools", args.transport, MCP_PORT)
 
     mcp.run(transport=args.transport)
