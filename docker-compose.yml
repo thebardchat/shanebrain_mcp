@@ -5,7 +5,7 @@ version: "3.9"
 #
 #   docker compose -f mcp-server/docker-compose.yml up -d --build
 #
-# Or from this repo's root (standalone — requires scripts/weaviate_helpers.py):
+# Or from this repo's root (standalone — uses scripts/weaviate_helpers.py in repo):
 #
 #   docker compose up -d --build
 
@@ -34,13 +34,22 @@ services:
       GCAL_TOKEN_PATH: ${GCAL_TOKEN_PATH:-/app/gcal_token.json}
       GCAL_CALENDAR_ID: ${GCAL_CALENDAR_ID:-primary}
       PLANNING_DIR: ${PLANNING_DIR:-/app/planning}
+      WEAVIATE_HOST: ${WEAVIATE_HOST:-localhost}
+      WEAVIATE_PORT: ${WEAVIATE_PORT:-8080}
+      WEAVIATE_GRPC_PORT: ${WEAVIATE_GRPC_PORT:-50051}
 
     volumes:
       # Google Calendar token — read-write so refreshed tokens persist
       - /mnt/shanebrain-raid/shanebrain-core/scripts/gcal_token.json:/app/gcal_token.json:rw
 
-      # Planning system — MUST be mounted or plans are lost on restart
+      # Planning system — MUST be mounted or plans are lost on container restart
       - /mnt/shanebrain-raid/shanebrain-core/planning-system:/app/planning:rw
+
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "50m"
+        max-file: "5"
 
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8100/health', timeout=5)"]

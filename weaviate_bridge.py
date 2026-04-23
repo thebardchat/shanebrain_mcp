@@ -67,7 +67,8 @@ class DockerWeaviateHelper(WeaviateHelper):
             result = col.data.insert(data)
             return str(result)
         except Exception as e:
-            print(f"Error inserting into {collection_name}: {e}")
+            import sys
+            print(f"Error inserting into {collection_name}: {e}", file=sys.stderr)
             return None
 
     def _generic_fetch(self, collection_name: str, filters=None, limit: int = 50):
@@ -87,11 +88,13 @@ class DockerWeaviateHelper(WeaviateHelper):
     def get_all_collection_counts(self) -> dict:
         """Get object counts for all known collections."""
         names = [
-            # Core collections (text2vec-ollama)
+            # Core collections (text2vec-ollama + nomic-embed-text, 768-dim)
             "LegacyKnowledge", "Conversation", "FriendProfile",
             "SocialKnowledge", "CrisisLog",
             "PersonalDoc", "DailyNote", "PersonalDraft",
             "SecurityLog", "PrivacyAudit",
+            # Buddy Claude dialogue turns (thread_id, speaker, content, topic_tag)
+            "ExternalPerspectives",
             # Training module collections (vectorizer: none)
             "BrainDoc", "BusinessDoc", "Document",
             "DraftTemplate", "MessageLog", "MyBrain",

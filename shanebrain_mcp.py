@@ -8,7 +8,7 @@ Groups: Knowledge (2), Chat (3), RAG Chat (1), Social (2), Vault (3),
         Notes (3), Drafts (2), Security (3), Weaviate Admin (2),
         Ollama (2), Planning (3), System (1), Email (2), Calendar (5)
 
-Transport: SSE on port 8100 (Docker), switchable to streamable_http via --transport
+Transport: streamable-http on port 8100 (Docker), switchable to sse/stdio via --transport
 Quality:   Pydantic v2 validation, MCP annotations, actionable errors, stderr logging
 """
 

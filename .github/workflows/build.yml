@@ -1,0 +1,57 @@
+name: Build
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python 3.13
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Syntax check — server
+        run: python -m py_compile shanebrain_mcp.py weaviate_bridge.py health.py
+
+      - name: Import check — server (no side effects)
+        run: |
+          python - <<'EOF'
+          import ast, sys
+          for f in ["shanebrain_mcp.py", "weaviate_bridge.py", "health.py"]:
+              try:
+                  ast.parse(open(f).read())
+                  print(f"  OK  {f}")
+              except SyntaxError as e:
+                  print(f"  FAIL {f}: {e}")
+                  sys.exit(1)
+          EOF
+
+      - name: Validate TOOLS.md tool count matches server
+        run: |
+          python - <<'EOF'
+          import re
+          server = open("shanebrain_mcp.py").read()
+          tools_md = open("TOOLS.md").read()
+          server_count = len(re.findall(r'@mcp\.tool\(', server))
+          md_count = len(re.findall(r'^### `shanebrain_', tools_md, re.MULTILINE))
+          print(f"  Server tools: {server_count}")
+          print(f"  TOOLS.md entries: {md_count}")
+          if server_count != md_count:
+              print(f"  MISMATCH — update TOOLS.md to match server ({server_count} tools)")
+              import sys; sys.exit(1)
+          print("  OK — counts match")
+          EOF
+
+      - name: Docker build
+        run: docker build -t shanebrain-mcp-test .
