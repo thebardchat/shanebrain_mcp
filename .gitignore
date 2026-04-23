@@ -1,0 +1,6 @@
+__pycache__/
+*.pyc
+.env
+gcal_credentials.json
+gcal_token.json
+gcal_cache.json
