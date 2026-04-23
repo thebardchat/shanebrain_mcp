@@ -6,7 +6,7 @@
 
 [![Constitution](https://img.shields.io/badge/Constitution-ShaneTheBrain-blue)](https://github.com/thebardchat/constitution)
 
-# ShaneBrain MCP Server v2.0
+# ShaneBrain MCP Server v2.3
 
 > **Try Claude free for 2 weeks** — the AI behind this entire ecosystem. [Start your free trial →](https://claude.ai/referral/4fAMYN9Ing)
 
@@ -15,7 +15,7 @@
 
 
 > Production-grade Model Context Protocol server for the ShaneBrain Pi 5 stack.
-> 42 tools across 12 groups. FastMCP + Weaviate RAG + Ollama + Planning System.
+> 34 tools across 14 groups. FastMCP + Weaviate RAG + Ollama + Google Calendar + Planning System.
 
 ---
 
@@ -64,6 +64,30 @@ python3 shanebrain_mcp.py --transport stdio
 | `OLLAMA_MODEL` | `shanebrain-3b:latest` | Default model for generation |
 | `PLANNING_DIR` | `/mnt/shanebrain-raid/shanebrain-core/planning-system` | Planning files root |
 | `MCP_PORT` | `8100` | Server listen port |
+| `GMAIL_APP_PASSWORD` | *(required for email)* | Gmail App Password for SMTP send/reply |
+| `GATEWAY_HOST` | `http://host.docker.internal:4200` | Angel Cloud Gateway base URL |
+| `GCAL_TOKEN_PATH` | `/app/gcal_token.json` | Path to Google Calendar OAuth token file |
+| `GCAL_CALENDAR_ID` | `primary` | Default Google Calendar ID |
+
+---
+
+## Docker Run
+
+The live container runs with `--network host` so it can reach Weaviate (8080),
+Ollama (11434), and the Angel Cloud Gateway (4200) on the Pi's localhost:
+
+```bash
+docker build -t shanebrain-mcp .
+docker run -d \
+  --name shanebrain-mcp \
+  --network host \
+  -e GMAIL_APP_PASSWORD="your-app-password-here" \
+  -v /path/to/gcal_token.json:/app/gcal_token.json:ro \
+  shanebrain-mcp
+```
+
+The server binds to `0.0.0.0:8100` inside the container. With `--network host`
+that exposes it on the Pi's LAN/Tailscale interface directly.
 
 ---
 
@@ -86,7 +110,7 @@ Or add to `~/.claude/mcp_servers.json`:
 
 ---
 
-## Tools Reference (42 tools, 12 groups)
+## Tools Reference (34 tools, 14 groups)
 
 ### Group 1 -- Knowledge (2)
 
@@ -175,6 +199,26 @@ Or add to `~/.claude/mcp_servers.json`:
 |------|-------------|
 | `shanebrain_system_health` | Ping Weaviate, Ollama, and Gateway; return latency dashboard |
 
+### Group 13 -- Email (2)
+
+| Tool | Description |
+|------|-------------|
+| `shanebrain_send_email` | Send an email from Shane's Gmail via SMTP (requires GMAIL_APP_PASSWORD env) |
+| `shanebrain_reply_email` | Reply to an email with proper thread headers (In-Reply-To, References) |
+
+### Group 14 -- Google Calendar (5)
+
+| Tool | Description |
+|------|-------------|
+| `shanebrain_calendar_list` | List upcoming Google Calendar events for the next N days |
+| `shanebrain_calendar_get` | Get a specific event by Google Calendar event ID |
+| `shanebrain_calendar_create` | Create a new calendar event with auto-duration (1-hour default) |
+| `shanebrain_calendar_update` | Patch an existing event — only provided fields are changed |
+| `shanebrain_calendar_delete` | Permanently delete an event by ID |
+
+**Calendar setup:** Requires `gcal_token.json` at `GCAL_TOKEN_PATH` (default `/app/gcal_token.json`).
+Run `scripts/google_calendar_setup.py` to authenticate and generate the token.
+
 ---
 
 ## Transport Options
@@ -222,12 +266,17 @@ pass/fail counts. Slow tools (RAG chat, briefing, draft generation) are skipped.
 
 | File | Purpose |
 |------|---------|
-| `shanebrain_mcp.py` | Main server (all 42 tools + health endpoint + lifespan) |
+| `shanebrain_mcp.py` | Main server (all 34 tools + health endpoint + lifespan) |
+| `weaviate_bridge.py` | DockerWeaviateHelper — Weaviate connection via Docker host network |
+| `health.py` | Health check functions for Weaviate, Ollama, and Gateway |
+| `requirements.txt` | Python dependencies |
+| `Dockerfile` | Container build (standalone; see note about weaviate_helpers.py) |
 | `test_smoke.py` | Smoke test suite for all tool groups |
 
-Note: The production deployment also uses `weaviate_bridge.py` and `health.py`
-as local imports. Those modules live in the Pi deployment at
-`/mnt/shanebrain-raid/shanebrain-core/mcp-server/`.
+**Note:** `weaviate_bridge.py` imports `scripts.weaviate_helpers.WeaviateHelper` which
+lives in the shanebrain-core monorepo at `scripts/weaviate_helpers.py`. The production
+Dockerfile copies it from there. For standalone deployment, copy it manually into a
+`scripts/` subdirectory alongside `weaviate_bridge.py`.
 
 
 ## Built With

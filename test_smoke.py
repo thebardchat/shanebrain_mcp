@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Smoke tests for ShaneBrain MCP Server v2.0
+Smoke tests for ShaneBrain MCP Server v2.3
 Hits each tool via the streamable-http endpoint and verifies no crashes.
 
 Usage:
@@ -115,7 +115,7 @@ def test(name: str, args: dict, expect_key: str = None):
 
 def main():
     global passed, failed
-    print(f"\nShaneBrain MCP Smoke Tests — {BASE_URL}")
+    print(f"\nShaneBrain MCP Smoke Tests v2.3 — {BASE_URL}")
     print("=" * 60)
 
     # Health check first
@@ -214,6 +214,19 @@ def main():
     # Group 12: System
     print("\n[Group 12: System]")
     test("shanebrain_system_health", {})
+
+    # Group 13: Email
+    print("\n[Group 13: Email]")
+    print("  SKIP shanebrain_send_email (sends real email — use manually)")
+    print("  SKIP shanebrain_reply_email (sends real email — use manually)")
+
+    # Group 14: Google Calendar
+    print("\n[Group 14: Google Calendar]")
+    test("shanebrain_calendar_list", {"days": 7, "max_results": 5})
+    print("  SKIP shanebrain_calendar_get (needs real event_id)")
+    print("  SKIP shanebrain_calendar_create (creates real events — use manually)")
+    print("  SKIP shanebrain_calendar_update (modifies real events — use manually)")
+    print("  SKIP shanebrain_calendar_delete (destructive — use manually)")
 
     # Summary
     print("\n" + "=" * 60)
