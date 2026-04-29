@@ -1,7 +1,17 @@
 #!/usr/bin/env python3
 """
-Smoke tests for ShaneBrain MCP Server v2.0
+Smoke tests for ShaneBrain MCP Server v2.5
 Hits each tool via the streamable-http endpoint and verifies no crashes.
+
+Groups 1-12: core ShaneBrain tools (knowledge, chat, vault, notes, etc.)
+Group 16:    Weaviate Session Tools — two tools for persisting and retrieving
+             full Claude session transcripts. weaviate_log_conversation writes
+             a session transcript (plus source tag and 200-char summary) into
+             the Conversation collection so sessions are searchable and survive
+             context resets. weaviate_get_context reads the 5 most recent
+             transcripts back out, formatted as plain text ready to paste into
+             CLAUDE.md at the start of a new session so Claude walks in with
+             memory of what was built last time.
 
 Usage:
     python3 test_smoke.py                  # default: http://localhost:8100
@@ -214,6 +224,20 @@ def main():
     # Group 12: System
     print("\n[Group 12: System]")
     test("shanebrain_system_health", {})
+
+    # Group 16: Weaviate Session Tools
+    # weaviate_log_conversation — stores a full session transcript into the
+    #   Conversation collection with source tag + 200-char summary. Designed
+    #   to be called from claude.ai at session end via MCP.
+    # weaviate_get_context — reads the 5 most recent transcripts back out,
+    #   formatted as plain text for direct paste into CLAUDE.md at session
+    #   start, so Claude walks in with memory of prior sessions.
+    print("\n[Group 16: Weaviate Session Tools]")
+    test("weaviate_log_conversation", {
+        "session_transcript": "Smoke test transcript — Group 16 weaviate_log_conversation",
+        "source": "smoke-test",
+    })
+    test("weaviate_get_context", {})
 
     # Summary
     print("\n" + "=" * 60)
