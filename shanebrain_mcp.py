@@ -1,12 +1,13 @@
 #!/usr/bin/env python3
 """
-ShaneBrain MCP Server v2.4
+ShaneBrain MCP Server v2.5
 ===========================
-35 tools across 15 groups — merged from Pi deployment + GitHub quality patterns.
+37 tools across 16 groups — merged from Pi deployment + GitHub quality patterns.
 
 Groups: Knowledge (2), Chat (3), RAG Chat (1), Social (2), Vault (3),
         Notes (3), Drafts (2), Security (3), Weaviate Admin (2),
-        Ollama (2), Planning (3), System (1), Email (2), Calendar (5)
+        Ollama (2), Planning (3), System (1), Email (2), Calendar (5),
+        Weaviate Session (2)
 
 Transport: streamable-http on port 8100 (Docker), switchable to sse/stdio via --transport
 Quality:   Pydantic v2 validation, MCP annotations, actionable errors, stderr logging
