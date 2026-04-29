@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """
-ShaneBrain MCP Server v2.3
+ShaneBrain MCP Server v2.4
 ===========================
-34 tools across 14 groups — merged from Pi deployment + GitHub quality patterns.
+35 tools across 15 groups — merged from Pi deployment + GitHub quality patterns.
 
 Groups: Knowledge (2), Chat (3), RAG Chat (1), Social (2), Vault (3),
         Notes (3), Drafts (2), Security (3), Weaviate Admin (2),
@@ -119,7 +119,7 @@ Be direct. Be brief. Be accurate."""
 
 @asynccontextmanager
 async def lifespan(app: FastMCP):
-    logger.info("ShaneBrain MCP v2.3 starting — 34 tools, 14 groups")
+    logger.info("ShaneBrain MCP v2.4 starting — 35 tools, 15 groups")
     # Check Weaviate
     try:
         with _weaviate() as h:
@@ -138,17 +138,11 @@ async def lifespan(app: FastMCP):
             logger.warning("Ollama: NOT ready")
     except Exception as e:
         logger.warning("Ollama: NOT reachable (%s)", e)
-    # Ensure planning dirs — MUST be mounted as a volume in Docker, not just a host path
+    # Ensure planning dirs
     PLANNING_DIR.mkdir(parents=True, exist_ok=True)
     for sub in ("active-projects", "templates", "completed", "logs"):
         (PLANNING_DIR / sub).mkdir(exist_ok=True)
     logger.info("Planning dir: %s", PLANNING_DIR)
-    if str(PLANNING_DIR).startswith("/mnt/"):
-        logger.warning(
-            "PLANNING_DIR is a host path (%s) — plans will be LOST on container restart "
-            "unless this path is mounted via -v. See docker-compose.yml.",
-            PLANNING_DIR,
-        )
     yield {}
     logger.info("ShaneBrain MCP shutting down.")
 
@@ -1184,8 +1178,6 @@ def _gcal_service():
         try:
             GCAL_TOKEN_PATH.write_text(json.dumps(data, indent=2))
         except (PermissionError, OSError) as write_err:
-            # Token file may be mounted read-only — refresh succeeded in memory,
-            # API calls will work but next startup will refresh again.
             logger.warning("Could not persist refreshed token (%s). Mount rw to persist.", write_err)
 
     return build("calendar", "v3", credentials=creds, cache_discovery=False)
@@ -1468,6 +1460,108 @@ async def http_health(request: Request) -> JSONResponse:
 
 
 # ===========================================================================
+# GROUP 15: Context Snapshot — 1 tool
+# Returns a rich Shane-context object for session start injection
+# ===========================================================================
+
+@mcp.tool(
+    name="shanebrain_context_snapshot",
+    annotations={"readOnlyHint": True, "destructiveHint": False, "idempotentHint": True, "openWorldHint": False},
+)
+def shanebrain_context_snapshot() -> str:
+    """
+    Pull a rich context snapshot of Shane's current state from Weaviate.
+    Call at the start of every session so Claude walks in knowing Shane — not cold.
+    Returns: sobriety, recent mood, last 3 sessions, active projects, family state.
+    """
+    from datetime import datetime
+
+    snapshot = {}
+
+    # --- Sobriety ---
+    sober_since = datetime(2023, 11, 27)
+    days = (datetime.now() - sober_since).days
+    years = days // 365
+    months = (days % 365) // 30
+    snapshot["sobriety"] = {
+        "days": days,
+        "label": f"{years} years, {months} months sober (since Nov 27, 2023)"
+    }
+
+    try:
+        with _weaviate() as h:
+
+            # --- Recent mood (last 5 daily notes) ---
+            notes = h._generic_fetch("DailyNote", limit=5)
+            mood_entries = []
+            for n in notes:
+                mood_entries.append({
+                    "date": n.get("date", ""),
+                    "content": n.get("content", "")[:200],
+                    "note_type": n.get("note_type", "note"),
+                })
+            snapshot["recent_mood"] = mood_entries
+
+            # --- Last 3 Claude Code sessions ---
+            recent_sessions = h.search_conversations(
+                "Claude Code session Shane built worked on", mode="CODE", limit=3
+            )
+            session_summaries = []
+            for s in recent_sessions:
+                msg = s.get("message", "")
+                # Extract first line (the session header) + first request
+                lines = [l.strip() for l in msg.split("\n") if l.strip()]
+                session_summaries.append({
+                    "date": lines[0] if lines else "",
+                    "preview": " | ".join(lines[2:5]) if len(lines) > 2 else msg[:200],
+                    "session_id": s.get("session_id", ""),
+                })
+            snapshot["recent_sessions"] = session_summaries
+
+            # --- Active projects from knowledge ---
+            projects = h.search_knowledge("active project building working on", limit=5)
+            snapshot["active_projects"] = [
+                {
+                    "title": p.get("title", "")[:80],
+                    "content": p.get("content", "")[:200],
+                    "source": p.get("source", ""),
+                }
+                for p in projects
+            ]
+
+            # --- Shane profile from PersonalDoc (if it exists) ---
+            profile_docs = h._generic_near_text(
+                "PersonalDoc", "shane profile who is shane mission values", limit=1
+            )
+            if profile_docs:
+                snapshot["shane_profile"] = profile_docs[0].get("content", "")[:500]
+            else:
+                snapshot["shane_profile"] = (
+                    "Shane Brazelton — SRM Concrete dispatcher, Hazel Green AL. "
+                    "Faith, family, sobriety, local AI. Building for the ~800M people "
+                    "Big Tech is about to leave behind. Wife Tiffany (Chiari malformation, shunts needed). "
+                    "Sons: Gavin (m. Angel), Kai, Pierce, Jaxton, Ryker (5)."
+                )
+
+            # --- Family state from recent notes ---
+            family_notes = h.search_conversations("Tiffany family health surgery kids", limit=2)
+            snapshot["family_context"] = [
+                n.get("message", "")[:200] for n in family_notes
+            ]
+
+    except Exception as e:
+        snapshot["error"] = f"Partial snapshot — Weaviate issue: {e}"
+
+    snapshot["instructions"] = (
+        "Use this snapshot to walk into the session knowing Shane. "
+        "Reference sobriety milestone if relevant. Check recent_sessions "
+        "to avoid re-doing work. Check family_context before discussing Tiffany."
+    )
+
+    return json.dumps(snapshot, default=str, indent=2)
+
+
+# ===========================================================================
 # Entry point
 # ===========================================================================
 
@@ -1478,10 +1572,10 @@ if __name__ == "__main__":
     # Suppress benign ResourceWarning from anyio/MCP framework
     warnings.filterwarnings("ignore", category=ResourceWarning, module="anyio")
 
-    parser = argparse.ArgumentParser(description="ShaneBrain MCP Server v2.3")
+    parser = argparse.ArgumentParser(description="ShaneBrain MCP Server v2.4")
     parser.add_argument("--transport", choices=["sse", "streamable-http", "stdio"], default="streamable-http")
     args = parser.parse_args()
 
-    logger.info("Starting ShaneBrain MCP v2.3 | transport=%s | port=%s | 34 tools", args.transport, MCP_PORT)
+    logger.info("Starting ShaneBrain MCP v2.4 | transport=%s | port=%s | 35 tools", args.transport, MCP_PORT)
 
     mcp.run(transport=args.transport)
