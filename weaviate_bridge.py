@@ -88,7 +88,7 @@ class DockerWeaviateHelper(WeaviateHelper):
     def get_all_collection_counts(self) -> dict:
         """Get object counts for all known collections."""
         names = [
-            # Core collections (text2vec-ollama + nomic-embed-text, 768-dim)
+            # Core collections (text2vec-transformers, 384-dim)
             "LegacyKnowledge", "Conversation", "FriendProfile",
             "SocialKnowledge", "CrisisLog",
             "PersonalDoc", "DailyNote", "PersonalDraft",

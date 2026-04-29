@@ -2,7 +2,7 @@
 
 ## What this repo is
 
-Production MCP server for shanebrain-1 (Pi 5). 37 tools, 16 groups.
+Production MCP server for shanebrain-1 (Pi 5). 32 tools, 14 groups.
 Runs as Docker container on port 8100 with `--network host`.
 
 **Live server:** `/mnt/shanebrain-raid/shanebrain-core/mcp-server/`
@@ -14,7 +14,7 @@ Runs as Docker container on port 8100 with `--network host`.
 |------|---------|
 | `shanebrain_mcp.py` | All 37 tools — mirror of live `server.py` |
 | `weaviate_bridge.py` | DockerWeaviateHelper subclass |
-| `health.py` | Weaviate / Ollama / Gateway health checks |
+| `health.py` | Weaviate / Gateway health checks |
 | `scripts/weaviate_helpers.py` | Base WeaviateHelper (shared with shanebrain-core) |
 | `docker-compose.yml` | Full deployment spec — authoritative |
 | `.env.example` | All env vars with defaults |

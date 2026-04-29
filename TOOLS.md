@@ -1,11 +1,14 @@
 # ShaneBrain MCP Tools Reference
 
-**Version:** v2.5  
-**Tool count:** 37 tools across 16 groups  
-**Transport:** Streamable HTTP on port 8100  
-**Endpoints:** `/mcp` (MCP JSON-RPC), `/health` (HTTP status)  
+**Version:** v2.6
+**Tool count:** 32 tools across 14 groups
+**Transport:** Streamable HTTP on port 8100
+**Endpoints:** `/mcp` (MCP JSON-RPC), `/health` (HTTP status)
 
-All tool names are prefixed with `shanebrain_` to prevent conflicts.
+All tool names are prefixed with `shanebrain_` (or `weaviate_` for Group 14) to prevent conflicts.
+
+Embeddings are produced server-side by Weaviate's `text2vec-transformers` vectorizer.
+There is no inference layer — Claude (the consumer) does any synthesis after retrieval.
 
 ---
 
@@ -90,25 +93,7 @@ Get conversation history for a session by ID.
 
 ---
 
-## Group 3: RAG Chat (1 tool)
-
-### `shanebrain_chat`
-
-Full RAG chat — searches knowledge base, then generates via local Ollama. Pipeline: semantic search LegacyKnowledge -> inject context -> Ollama generate. 100% local, zero cloud.
-
-**Parameters:**
-| Name | Type | Required | Default | Description |
-|------|------|----------|---------|-------------|
-| `message` | string | yes | — | Your message (1–2000 chars) |
-| `model` | string | no | `""` | Ollama model override (default: OLLAMA_MODEL env) |
-| `temperature` | float | no | 0.3 | 0.0–2.0 |
-| `max_tokens` | integer | no | 100 | 1–4096 |
-
-**Returns:** JSON with `response`, `knowledge_chunks_used`, and `model`.
-
----
-
-## Group 4: Social (2 tools)
+## Group 3: Social (2 tools)
 
 ### `shanebrain_search_friends`
 
@@ -137,7 +122,7 @@ Get friend profiles ranked by relationship strength (highest first).
 
 ---
 
-## Group 5: Vault (3 tools)
+## Group 4: Vault (3 tools)
 
 ### `shanebrain_vault_search`
 
@@ -183,7 +168,7 @@ List document counts per category in the PersonalDoc vault.
 
 ---
 
-## Group 6: Notes (3 tools)
+## Group 5: Notes (2 tools)
 
 ### `shanebrain_daily_note_add`
 
@@ -215,32 +200,7 @@ Search daily notes semantically.
 
 ---
 
-### `shanebrain_daily_briefing`
-
-AI-generated daily briefing summarizing recent notes via Ollama. Requires Ollama to be running.
-
-**Parameters:** None
-
-**Returns:** JSON with `briefing` text and `note_count`.
-
----
-
-## Group 7: Drafts (2 tools)
-
-### `shanebrain_draft_create`
-
-Generate a writing draft with optional vault context via Ollama. Searches PersonalDoc for relevant context, then generates in Shane's voice. Saves result to PersonalDraft collection. Requires Ollama.
-
-**Parameters:**
-| Name | Type | Required | Default | Description |
-|------|------|----------|---------|-------------|
-| `prompt` | string | yes | — | What to write about (1–2000 chars) |
-| `draft_type` | string | no | `general` | email, message, post, letter, general |
-| `use_vault_context` | boolean | no | true | Search PersonalDoc for context |
-
-**Returns:** JSON with `draft`, `draft_type`, `saved`, `uuid`, `vault_context_used`.
-
----
+## Group 6: Drafts (1 tool)
 
 ### `shanebrain_draft_search`
 
@@ -257,7 +217,7 @@ Search saved writing drafts (PersonalDraft) semantically.
 
 ---
 
-## Group 8: Security (3 tools)
+## Group 7: Security (3 tools)
 
 ### `shanebrain_security_log_search`
 
@@ -301,7 +261,7 @@ Search PrivacyAudit entries semantically.
 
 ---
 
-## Group 9: Weaviate Admin (2 tools)
+## Group 8: Weaviate Admin (2 tools)
 
 ### `shanebrain_rag_list_classes`
 
@@ -330,39 +290,7 @@ Permanently delete a specific object from Weaviate by UUID. **Destructive — ir
 
 ---
 
-## Group 10: Ollama (2 tools)
-
-### `shanebrain_ollama_generate`
-
-Generate text using a locally-running Ollama model. Zero cloud dependency. For RAG-grounded answers use `shanebrain_chat` instead.
-
-**Parameters:**
-| Name | Type | Required | Default | Description |
-|------|------|----------|---------|-------------|
-| `prompt` | string | yes | — | Prompt or question (1–8000 chars) |
-| `model` | string | no | `""` | Ollama model name (default: OLLAMA_MODEL env) |
-| `system_prompt` | string | no | null | Optional system prompt (max 2000 chars) |
-| `temperature` | float | no | 0.7 | 0.0–2.0 |
-| `max_tokens` | integer | no | 512 | 1–4096 |
-
-**Returns:** JSON with `response`, `model`, `tokens`, `duration_s`.
-
----
-
-### `shanebrain_ollama_list_models`
-
-List all Ollama models currently downloaded on this Pi.
-
-**Parameters:**
-| Name | Type | Required | Default | Description |
-|------|------|----------|---------|-------------|
-| `response_format` | string | no | `markdown` | `json` or `markdown` |
-
-**Returns:** Model list with names, sizes, and modification dates.
-
----
-
-## Group 11: Planning (3 tools)
+## Group 9: Planning (3 tools)
 
 ### `shanebrain_plan_list`
 
@@ -407,11 +335,11 @@ Create or update a markdown planning file. Supports overwrite and append modes.
 
 ---
 
-## Group 12: System (1 tool)
+## Group 10: System (1 tool)
 
 ### `shanebrain_system_health`
 
-Check ShaneBrain system health — Weaviate, Ollama, Gateway + all collection counts.
+Check ShaneBrain system health — Weaviate, Gateway + all collection counts.
 
 **Parameters:** None
 
@@ -419,7 +347,7 @@ Check ShaneBrain system health — Weaviate, Ollama, Gateway + all collection co
 
 ---
 
-## Group 13: Email (2 tools)
+## Group 11: Email (2 tools)
 
 ### `shanebrain_send_email`
 
@@ -455,19 +383,7 @@ Reply to an email from Shane's Gmail with proper thread headers. Requires `GMAIL
 
 ---
 
-## Notes
-
-- All tools use Pydantic v2 validation with Field constraints
-- All tools carry MCP annotations: `readOnlyHint`, `destructiveHint`, `idempotentHint`, `openWorldHint`
-- Errors include actionable hints (connection errors, timeouts, not-found)
-- Logging goes to stderr only — never pollutes MCP stdout
-- Tools requiring Ollama inference are noted; they add 10–60s latency on Pi 5
-- Email tools require `GMAIL_APP_PASSWORD` env var — never hardcoded
-- Calendar tools require `gcal_token.json` at `GCAL_TOKEN_PATH` — run `scripts/google_calendar_setup.py` once to authenticate
-
----
-
-## Group 14: Google Calendar (5 tools)
+## Group 12: Google Calendar (5 tools)
 
 Requires Google Calendar OAuth2 token at `GCAL_TOKEN_PATH` (default `/app/gcal_token.json`).
 Token auto-refreshes when expired using the stored refresh token.
@@ -555,7 +471,7 @@ Permanently delete a Google Calendar event by ID. **Destructive — irreversible
 
 ---
 
-## Group 15: Context Snapshot (1 tool)
+## Group 13: Context Snapshot (1 tool)
 
 ### `shanebrain_context_snapshot`
 
@@ -567,13 +483,13 @@ Pull a rich context snapshot of Shane's current state from Weaviate. Call at the
 
 ---
 
-## Group 16: Weaviate Session Tools (2 tools)
+## Group 14: Weaviate Session Tools (2 tools)
 
 Persist and retrieve full Claude session transcripts so memory survives context resets.
 
 ### `weaviate_log_conversation`
 
-Log a full session transcript to Weaviate's `Conversation` collection. Vectorized via the active text vectorizer. Stores transcript, source, timestamp, and a 200-char summary. Designed to be called from claude.ai via MCP at session end.
+Log a full session transcript to Weaviate's `Conversation` collection. Vectorized via text2vec-transformers. Stores transcript, source, timestamp, and a 200-char summary. Designed to be called from claude.ai via MCP at session end.
 
 **Parameters:**
 | Name | Type | Required | Default | Description |
@@ -592,6 +508,18 @@ Return recent session context formatted for CLAUDE.md injection. Fetches the 5 m
 **Parameters:** None
 
 **Returns:** Plain text — `=== RECENT SESSION CONTEXT ===` block (5 most recent transcripts with timestamp + source) followed by `=== CONTEXT SNAPSHOT ===` (output of `shanebrain_context_snapshot`).
+
+---
+
+## Notes
+
+- All tools use Pydantic v2 validation with Field constraints
+- All tools carry MCP annotations: `readOnlyHint`, `destructiveHint`, `idempotentHint`, `openWorldHint`
+- Errors include actionable hints (connection errors, timeouts, not-found)
+- Logging goes to stderr only — never pollutes MCP stdout
+- Embeddings are produced by Weaviate's `text2vec-transformers` vectorizer; no inference dependency
+- Email tools require `GMAIL_APP_PASSWORD` env var — never hardcoded
+- Calendar tools require `gcal_token.json` at `GCAL_TOKEN_PATH` — run `scripts/google_calendar_setup.py` once to authenticate
 
 ---
 
