@@ -1,7 +1,7 @@
 # ShaneBrain MCP Tools Reference
 
-**Version:** v2.3  
-**Tool count:** 34 tools across 14 groups  
+**Version:** v2.5  
+**Tool count:** 37 tools across 16 groups  
 **Transport:** Streamable HTTP on port 8100  
 **Endpoints:** `/mcp` (MCP JSON-RPC), `/health` (HTTP status)  
 
@@ -552,6 +552,46 @@ Permanently delete a Google Calendar event by ID. **Destructive — irreversible
 | `calendar_id` | string | no | null | Calendar ID (default: primary) |
 
 **Returns:** JSON with `deleted: true`, `event_id`.
+
+---
+
+## Group 15: Context Snapshot (1 tool)
+
+### `shanebrain_context_snapshot`
+
+Pull a rich context snapshot of Shane's current state from Weaviate. Call at the start of every session so Claude walks in knowing Shane — not cold. Returns sobriety, recent mood (last 5 daily notes), last 3 Claude Code sessions, active projects, Shane profile, and family context.
+
+**Parameters:** None
+
+**Returns:** JSON with `sobriety`, `recent_mood`, `recent_sessions`, `active_projects`, `shane_profile`, `family_context`, `instructions`. On Weaviate failure, returns a partial snapshot with an `error` field.
+
+---
+
+## Group 16: Weaviate Session Tools (2 tools)
+
+Persist and retrieve full Claude session transcripts so memory survives context resets.
+
+### `weaviate_log_conversation`
+
+Log a full session transcript to Weaviate's `Conversation` collection. Vectorized via the active text vectorizer. Stores transcript, source, timestamp, and a 200-char summary. Designed to be called from claude.ai via MCP at session end.
+
+**Parameters:**
+| Name | Type | Required | Default | Description |
+|------|------|----------|---------|-------------|
+| `session_transcript` | string | yes | — | Full session transcript (min 1 char) |
+| `source` | string | no | `claude.ai` | Origin: `claude.ai`, `claude-code`, etc. |
+
+**Returns:** JSON with `success`, `uuid`, and `summary` on success; `success: false` with `error` on failure (e.g. Conversation collection missing).
+
+---
+
+### `weaviate_get_context`
+
+Return recent session context formatted for CLAUDE.md injection. Fetches the 5 most recent Conversation entries (newest first) plus the context snapshot. Output is plain text suitable for direct append to CLAUDE.md at session start.
+
+**Parameters:** None
+
+**Returns:** Plain text — `=== RECENT SESSION CONTEXT ===` block (5 most recent transcripts with timestamp + source) followed by `=== CONTEXT SNAPSHOT ===` (output of `shanebrain_context_snapshot`).
 
 ---
 

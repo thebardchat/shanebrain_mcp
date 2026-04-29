@@ -3,6 +3,7 @@ __pycache__/
 *.pyo
 .env
 .env.local
+.claude/infra.env
 gcal_credentials.json
 gcal_token.json
 gcal_cache.json

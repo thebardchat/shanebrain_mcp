@@ -2,7 +2,7 @@
 
 ## What this repo is
 
-Production MCP server for shanebrain-1 (Pi 5). 34 tools, 14 groups.
+Production MCP server for shanebrain-1 (Pi 5). 37 tools, 16 groups.
 Runs as Docker container on port 8100 with `--network host`.
 
 **Live server:** `/mnt/shanebrain-raid/shanebrain-core/mcp-server/`
@@ -12,7 +12,7 @@ Runs as Docker container on port 8100 with `--network host`.
 
 | File | Purpose |
 |------|---------|
-| `shanebrain_mcp.py` | All 34 tools — mirror of live `server.py` |
+| `shanebrain_mcp.py` | All 37 tools — mirror of live `server.py` |
 | `weaviate_bridge.py` | DockerWeaviateHelper subclass |
 | `health.py` | Weaviate / Ollama / Gateway health checks |
 | `scripts/weaviate_helpers.py` | Base WeaviateHelper (shared with shanebrain-core) |
@@ -48,6 +48,22 @@ Runs as Docker container on port 8100 with `--network host`.
 All defined in `.env.example`. Required: `GMAIL_APP_PASSWORD`.
 Secrets are stored in Weaviate PersonalDoc (category `credentials`).
 Rebuild env file: `python3 scripts/env_from_vault.py`
+
+## Infra cutover (Phase 3)
+
+`.claude/infra.env` holds the variables that flip when the active Weaviate
+host changes (e.g. Pi 5 → neworleans). Scaffold lives at
+`.claude/infra.env.example` (committed). The actual `.claude/infra.env` is
+gitignored — per-host values only.
+
+Source before running scripts:
+```
+set -a; source .claude/infra.env; set +a
+```
+
+Cutover = edit `.claude/infra.env` and re-source. No code changes.
+Variables that are host-invariant (OLLAMA_MODEL, MCP_PORT, GCAL_*) stay in
+`.env` / `docker-compose.yml`.
 
 ## Google Calendar setup
 

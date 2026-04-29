@@ -6,7 +6,7 @@
 
 [![Constitution](https://img.shields.io/badge/Constitution-ShaneTheBrain-blue)](https://github.com/thebardchat/constitution)
 
-# ShaneBrain MCP Server v2.3
+# ShaneBrain MCP Server v2.5
 
 > **Try Claude free for 2 weeks** — the AI behind this entire ecosystem. [Start your free trial →](https://claude.ai/referral/4fAMYN9Ing)
 
@@ -15,7 +15,7 @@
 
 
 > Production-grade Model Context Protocol server for the ShaneBrain Pi 5 stack.
-> 34 tools across 14 groups. FastMCP + Weaviate RAG + Ollama + Google Calendar + Planning System.
+> 37 tools across 16 groups. FastMCP + Weaviate RAG + Ollama + Google Calendar + Planning System.
 
 ---
 
@@ -110,7 +110,7 @@ Or add to `~/.claude/mcp_servers.json`:
 
 ---
 
-## Tools Reference (34 tools, 14 groups)
+## Tools Reference (37 tools, 16 groups)
 
 ### Group 1 -- Knowledge (2)
 
@@ -219,6 +219,21 @@ Or add to `~/.claude/mcp_servers.json`:
 **Calendar setup:** Requires `gcal_token.json` at `GCAL_TOKEN_PATH` (default `/app/gcal_token.json`).
 Run `scripts/google_calendar_setup.py` to authenticate and generate the token.
 
+### Group 15 -- Context Snapshot (1)
+
+| Tool | Description |
+|------|-------------|
+| `shanebrain_context_snapshot` | Rich session-start snapshot — sobriety, mood, last 3 sessions, active projects, family context |
+
+### Group 16 -- Weaviate Session Tools (2)
+
+Persist and retrieve full Claude session transcripts so memory survives context resets.
+
+| Tool | Description |
+|------|-------------|
+| `weaviate_log_conversation` | Store a full session transcript in `Conversation` (timestamp, source, 200-char summary) |
+| `weaviate_get_context` | Return 5 most recent transcripts + context snapshot, formatted for CLAUDE.md injection |
+
 ---
 
 ## Transport Options
@@ -266,7 +281,7 @@ pass/fail counts. Slow tools (RAG chat, briefing, draft generation) are skipped.
 
 | File | Purpose |
 |------|---------|
-| `shanebrain_mcp.py` | Main server (all 34 tools + health endpoint + lifespan) |
+| `shanebrain_mcp.py` | Main server (all 37 tools + health endpoint + lifespan) |
 | `weaviate_bridge.py` | DockerWeaviateHelper — Weaviate connection via Docker host network |
 | `health.py` | Health check functions for Weaviate, Ollama, and Gateway |
 | `requirements.txt` | Python dependencies |
