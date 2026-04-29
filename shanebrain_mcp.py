@@ -1658,10 +1658,10 @@ if __name__ == "__main__":
     # Suppress benign ResourceWarning from anyio/MCP framework
     warnings.filterwarnings("ignore", category=ResourceWarning, module="anyio")
 
-    parser = argparse.ArgumentParser(description="ShaneBrain MCP Server v2.4")
+    parser = argparse.ArgumentParser(description="ShaneBrain MCP Server v2.5")
     parser.add_argument("--transport", choices=["sse", "streamable-http", "stdio"], default="streamable-http")
     args = parser.parse_args()
 
-    logger.info("Starting ShaneBrain MCP v2.4 | transport=%s | port=%s | 35 tools", args.transport, MCP_PORT)
+    logger.info("Starting ShaneBrain MCP v2.5 | transport=%s | port=%s | 37 tools", args.transport, MCP_PORT)
 
     mcp.run(transport=args.transport)
