@@ -62,7 +62,7 @@ set -a; source .claude/infra.env; set +a
 ```
 
 Cutover = edit `.claude/infra.env` and re-source. No code changes.
-Variables that are host-invariant (OLLAMA_MODEL, MCP_PORT, GCAL_*) stay in
+Variables that are host-invariant (MCP_PORT, GCAL_*) stay in
 `.env` / `docker-compose.yml`.
 
 ## Google Calendar setup
