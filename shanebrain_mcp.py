@@ -120,7 +120,7 @@ Be direct. Be brief. Be accurate."""
 
 @asynccontextmanager
 async def lifespan(app: FastMCP):
-    logger.info("ShaneBrain MCP v2.4 starting — 35 tools, 15 groups")
+    logger.info("ShaneBrain MCP v2.5 starting — 37 tools, 16 groups")
     # Check Weaviate
     try:
         with _weaviate() as h:
@@ -1560,6 +1560,91 @@ def shanebrain_context_snapshot() -> str:
     )
 
     return json.dumps(snapshot, default=str, indent=2)
+
+
+# ===========================================================================
+# GROUP 16: Weaviate Session Tools — 2 tools
+# weaviate_log_conversation: store a full session transcript
+# weaviate_get_context: retrieve recent sessions for CLAUDE.md injection
+# ===========================================================================
+
+class WeaviateLogConversationInput(BaseModel):
+    model_config = ConfigDict(str_strip_whitespace=True, extra="forbid")
+    session_transcript: str = Field(..., description="Full session transcript to store", min_length=1)
+    source: str = Field(default="claude.ai", description="Origin of the session: 'claude.ai', 'claude-code', etc.")
+
+
+@mcp.tool(
+    name="weaviate_log_conversation",
+    annotations={"readOnlyHint": False, "destructiveHint": False, "idempotentHint": False, "openWorldHint": False},
+)
+def weaviate_log_conversation(params: WeaviateLogConversationInput) -> str:
+    """Log a full session transcript to Weaviate's Conversation collection.
+
+    Vectorized via nomic-embed-text (text2vec-ollama). Stores transcript, source,
+    timestamp, and 200-char summary. Designed to be called from claude.ai via MCP
+    at session end.
+    """
+    try:
+        with _weaviate() as h:
+            now = datetime.now(timezone.utc)
+            data = {
+                "message": params.session_transcript,
+                "role": "transcript",
+                "mode": "TRANSCRIPT",
+                "session_id": f"session-{now.strftime('%Y%m%dT%H%M%S')}",
+                "timestamp": now.isoformat(),
+                "source": params.source,
+                "summary": params.session_transcript[:200],
+            }
+            uid = h._generic_insert("Conversation", data)
+            if uid:
+                return json.dumps({"success": True, "uuid": uid, "summary": data["summary"]})
+            return json.dumps({"success": False, "error": "Conversation collection may not exist."})
+    except Exception as e:
+        return _format_error(e, "weaviate_log_conversation")
+
+
+@mcp.tool(
+    name="weaviate_get_context",
+    annotations={"readOnlyHint": True, "destructiveHint": False, "idempotentHint": True, "openWorldHint": False},
+)
+def weaviate_get_context() -> str:
+    """Return recent session context formatted for CLAUDE.md injection.
+
+    Fetches the 5 most recent Conversation entries (newest first) plus
+    the context snapshot. Output is plain text suitable for direct append
+    to CLAUDE.md at session start.
+    """
+    try:
+        from weaviate.classes.query import Sort
+
+        lines = ["=== RECENT SESSION CONTEXT ===\n"]
+
+        with _weaviate() as h:
+            if h.collection_exists("Conversation"):
+                col = h.client.collections.get("Conversation")
+                response = col.query.fetch_objects(
+                    sort=Sort.by_creation_time(ascending=False),
+                    limit=5,
+                )
+                for obj in response.objects:
+                    props = obj.properties
+                    ts = props.get("timestamp", "")
+                    source = props.get("source", "unknown")
+                    summary = props.get("summary", (props.get("message") or "")[:200])
+                    lines.append(f"[{ts}] [{source}]\n{summary}\n\n")
+
+        # Append context snapshot if available
+        try:
+            lines.append("=== CONTEXT SNAPSHOT ===\n")
+            lines.append(shanebrain_context_snapshot())
+        except Exception:
+            pass
+
+        return "".join(lines)
+    except Exception as e:
+        return _format_error(e, "weaviate_get_context")
 
 
 # ===========================================================================
