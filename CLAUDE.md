@@ -65,6 +65,34 @@ Cutover = edit `.claude/infra.env` and re-source. No code changes.
 Variables that are host-invariant (MCP_PORT, GCAL_*) stay in
 `.env` / `docker-compose.yml`.
 
+### Schema validation gate
+
+Before flipping `WEAVIATE_HOST` to a new primary (or promoting a replica
+to primary), confirm the target's schema matches the live one. Run from
+the source host so both `curl` calls hit the same network:
+
+```
+diff \
+  <(curl -sf "http://${WEAVIATE_HOST_FROM}:${WEAVIATE_PORT_FROM:-8080}/v1/schema" \
+      | python3 -c 'import sys,json; print("\n".join(sorted(c["class"] for c in json.load(sys.stdin)["classes"])))') \
+  <(curl -sf "http://${WEAVIATE_HOST_TO}:${WEAVIATE_PORT_TO:-8080}/v1/schema" \
+      | python3 -c 'import sys,json; print("\n".join(sorted(c["class"] for c in json.load(sys.stdin)["classes"])))') \
+  && echo "schema OK" || { echo "SCHEMA MISMATCH — abort cutover"; exit 1; }
+```
+
+If this fails: re-run `scripts/replica_sync.sh` (or rerun
+`scripts/setup_weaviate_schema.py` against the new host if it's a fresh
+install) and re-validate before proceeding. Do NOT cut over with a
+schema diff outstanding — clients will hit `class not found` errors at
+runtime.
+
+### Drift check
+
+Run `scripts/diff.py` (after sourcing `.claude/infra.env`) to compare
+object counts collection-by-collection between the local Pi and the
+configured primary. Exits non-zero if any collection drifts past
+`DRIFT_THRESHOLD_PCT` (default 0.5%). Suitable for nightly cron.
+
 ## Google Calendar setup
 
 First-time auth:
