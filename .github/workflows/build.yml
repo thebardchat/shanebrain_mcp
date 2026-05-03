@@ -44,7 +44,7 @@ jobs:
           server = open("shanebrain_mcp.py").read()
           tools_md = open("TOOLS.md").read()
           server_count = len(re.findall(r'@mcp\.tool\(', server))
-          md_count = len(re.findall(r'^### `shanebrain_', tools_md, re.MULTILINE))
+          md_count = len(re.findall(r'^### `(?:shanebrain|weaviate)_', tools_md, re.MULTILINE))
           print(f"  Server tools: {server_count}")
           print(f"  TOOLS.md entries: {md_count}")
           if server_count != md_count:

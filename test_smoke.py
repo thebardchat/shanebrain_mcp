@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 """
-Smoke tests for ShaneBrain MCP Server v2.5
+Smoke tests for ShaneBrain MCP Server v2.6
 Hits each tool via the streamable-http endpoint and verifies no crashes.
 
-Groups 1-12: core ShaneBrain tools (knowledge, chat, vault, notes, etc.)
-Group 16:    Weaviate Session Tools — two tools for persisting and retrieving
+Groups 1-13: core ShaneBrain tools (knowledge, chat, vault, notes, etc.)
+Group 14:    Weaviate Session Tools — two tools for persisting and retrieving
              full Claude session transcripts. weaviate_log_conversation writes
              a session transcript (plus source tag and 200-char summary) into
              the Conversation collection so sessions are searchable and survive
@@ -169,63 +169,49 @@ def main():
     test("shanebrain_log_conversation", {"message": "smoke test", "role": "system", "mode": "CODE"})
     test("shanebrain_get_conversation_history", {"session_id": "test-smoke-000", "limit": 5})
 
-    # Group 3: RAG Chat (skip — slow Ollama call)
-    print("\n[Group 3: RAG Chat]")
-    print("  SKIP shanebrain_chat (requires Ollama inference, ~30s)")
-
-    # Group 4: Social
-    print("\n[Group 4: Social]")
+    # Group 3: Social
+    print("\n[Group 3: Social]")
     test("shanebrain_search_friends", {"query": "friend", "limit": 2})
     test("shanebrain_get_top_friends", {"limit": 3})
 
-    # Group 5: Vault
-    print("\n[Group 5: Vault]")
+    # Group 4: Vault
+    print("\n[Group 4: Vault]")
     test("shanebrain_vault_search", {"query": "document", "limit": 2})
     test("shanebrain_vault_add", {"content": "Smoke test vault entry", "category": "personal"})
     test("shanebrain_vault_list_categories", {"limit": 50})
 
-    # Group 6: Notes
-    print("\n[Group 6: Notes]")
+    # Group 5: Notes
+    print("\n[Group 5: Notes]")
     test("shanebrain_daily_note_add", {"content": "Smoke test note", "note_type": "todo"})
     test("shanebrain_daily_note_search", {"query": "test", "limit": 2})
-    # Skip daily_briefing — requires Ollama
-    print("  SKIP shanebrain_daily_briefing (requires Ollama inference)")
 
-    # Group 7: Drafts
-    print("\n[Group 7: Drafts]")
+    # Group 6: Drafts
+    print("\n[Group 6: Drafts]")
     test("shanebrain_draft_search", {"query": "test draft", "limit": 2})
-    # Skip draft_create — requires Ollama
-    print("  SKIP shanebrain_draft_create (requires Ollama inference)")
 
-    # Group 8: Security
-    print("\n[Group 8: Security]")
+    # Group 7: Security
+    print("\n[Group 7: Security]")
     test("shanebrain_security_log_search", {"query": "login", "limit": 2})
     test("shanebrain_security_log_recent", {"severity": "", "limit": 5})
     test("shanebrain_privacy_audit_search", {"query": "account", "limit": 2})
 
-    # Group 9: Weaviate Admin
-    print("\n[Group 9: Weaviate Admin]")
+    # Group 8: Weaviate Admin
+    print("\n[Group 8: Weaviate Admin]")
     test("shanebrain_rag_list_classes", {"response_format": "json"})
     # Skip delete — destructive
     print("  SKIP shanebrain_rag_delete (destructive, needs real UUID)")
 
-    # Group 10: Ollama
-    print("\n[Group 10: Ollama]")
-    test("shanebrain_ollama_list_models", {"response_format": "json"})
-    # Skip generate — slow
-    print("  SKIP shanebrain_ollama_generate (requires inference, ~30s)")
-
-    # Group 11: Planning
-    print("\n[Group 11: Planning]")
+    # Group 9: Planning
+    print("\n[Group 9: Planning]")
     test("shanebrain_plan_list", {"subfolder": "active-projects"})
     test("shanebrain_plan_write", {"filename": "smoke-test.md", "content": "# Smoke Test\nThis file can be deleted.", "subfolder": "logs"})
     test("shanebrain_plan_read", {"filename": "smoke-test.md", "subfolder": "logs"})
 
-    # Group 12: System
-    print("\n[Group 12: System]")
+    # Group 10: System
+    print("\n[Group 10: System]")
     test("shanebrain_system_health", {})
 
-    # Group 16: Weaviate Session Tools
+    # Group 14: Weaviate Session Tools
     # weaviate_log_conversation — stores a full session transcript into the
     #   Conversation collection with source tag + 200-char summary. Designed
     #   to be called from claude.ai at session end via MCP.

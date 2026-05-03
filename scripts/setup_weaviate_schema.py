@@ -76,10 +76,7 @@ def setup_schema(client):
         {
             "name": "SocialKnowledge",
             "description": "Knowledge harvested from Facebook interactions",
-            "vectorizer": Configure.Vectorizer.text2vec_ollama(
-                model="llama3.2:1b",
-                api_endpoint="http://host.docker.internal:11434"
-            ),
+            "vectorizer": Configure.Vectorizer.text2vec_transformers(),
             "properties": [
                 Property(name="content", data_type=DataType.TEXT, description="The interaction content"),
                 Property(name="author_name", data_type=DataType.TEXT, description="Name of the person"),
@@ -96,10 +93,7 @@ def setup_schema(client):
         {
             "name": "FriendProfile",
             "description": "Living profiles of people who interact on Facebook",
-            "vectorizer": Configure.Vectorizer.text2vec_ollama(
-                model="llama3.2:1b",
-                api_endpoint="http://host.docker.internal:11434"
-            ),
+            "vectorizer": Configure.Vectorizer.text2vec_transformers(),
             "properties": [
                 Property(name="name", data_type=DataType.TEXT, description="Person's display name"),
                 Property(name="facebook_id", data_type=DataType.TEXT, description="Facebook user ID"),
@@ -129,11 +123,12 @@ def setup_schema(client):
                 skipped += 1
                 continue
 
-            # Use custom vectorizer if specified, otherwise default to text2vec-ollama
-            vectorizer = schema.get("vectorizer", Configure.Vectorizer.text2vec_ollama(
-                model="llama3.2:1b",
-                api_endpoint="http://host.docker.internal:11434"
-            ) if class_name != "CrisisLog" else None)
+            # Use custom vectorizer if specified, otherwise default to text2vec-transformers.
+            # CrisisLog stays vectorizer-less (no semantic search needed).
+            vectorizer = schema.get(
+                "vectorizer",
+                Configure.Vectorizer.text2vec_transformers() if class_name != "CrisisLog" else None,
+            )
 
             client.collections.create(
                 name=class_name,

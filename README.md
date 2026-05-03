@@ -6,7 +6,7 @@
 
 [![Constitution](https://img.shields.io/badge/Constitution-ShaneTheBrain-blue)](https://github.com/thebardchat/constitution)
 
-# ShaneBrain MCP Server v2.3
+# ShaneBrain MCP Server v2.6
 
 > **Try Claude free for 2 weeks** — the AI behind this entire ecosystem. [Start your free trial →](https://claude.ai/referral/4fAMYN9Ing)
 
@@ -15,16 +15,16 @@
 
 
 > Production-grade Model Context Protocol server for the ShaneBrain Pi 5 stack.
-> 34 tools across 14 groups. FastMCP + Weaviate RAG + Ollama + Google Calendar + Planning System.
+> 32 tools across 14 groups. FastMCP + Weaviate (text2vec-transformers) + Google Calendar + Planning System.
 
 ---
 
 ## Stack
 
 - **Raspberry Pi 5** (16 GB) running all services
-- **Weaviate** vector database (17 collections, nomic-embed-text 768-dim)
-- **Ollama** local LLM inference (shanebrain-3b, llama3.2:3b)
+- **Weaviate** vector database (17 collections, `text2vec-transformers` 384-dim)
 - **Planning System** markdown-based project management on disk
+- **No inference layer** — Claude (the consumer) does any synthesis after retrieval
 
 ---
 
@@ -41,7 +41,7 @@ docker compose up -d shanebrain-mcp
 ### Direct / systemd
 
 ```bash
-pip install "mcp[fastmcp]" httpx pydantic weaviate-client ollama --break-system-packages
+pip install "mcp[fastmcp]" httpx pydantic weaviate-client --break-system-packages
 
 # Default: streamable-http on port 8100
 python3 shanebrain_mcp.py
@@ -60,8 +60,6 @@ python3 shanebrain_mcp.py --transport stdio
 | `WEAVIATE_HOST` | `localhost` | Weaviate hostname |
 | `WEAVIATE_PORT` | `8080` | Weaviate HTTP port |
 | `WEAVIATE_GRPC_PORT` | `50051` | Weaviate gRPC port |
-| `OLLAMA_HOST` | `http://localhost:11434` | Ollama API base URL |
-| `OLLAMA_MODEL` | `shanebrain-3b:latest` | Default model for generation |
 | `PLANNING_DIR` | `/mnt/shanebrain-raid/shanebrain-core/planning-system` | Planning files root |
 | `MCP_PORT` | `8100` | Server listen port |
 | `GMAIL_APP_PASSWORD` | *(required for email)* | Gmail App Password for SMTP send/reply |
@@ -73,8 +71,8 @@ python3 shanebrain_mcp.py --transport stdio
 
 ## Docker Run
 
-The live container runs with `--network host` so it can reach Weaviate (8080),
-Ollama (11434), and the Angel Cloud Gateway (4200) on the Pi's localhost:
+The live container runs with `--network host` so it can reach Weaviate (8080)
+and the Angel Cloud Gateway (4200) on the Pi's localhost:
 
 ```bash
 docker build -t shanebrain-mcp .
@@ -110,7 +108,7 @@ Or add to `~/.claude/mcp_servers.json`:
 
 ---
 
-## Tools Reference (34 tools, 14 groups)
+## Tools Reference (32 tools, 14 groups)
 
 ### Group 1 -- Knowledge (2)
 
@@ -127,20 +125,14 @@ Or add to `~/.claude/mcp_servers.json`:
 | `shanebrain_log_conversation` | Log a message to the Conversation collection |
 | `shanebrain_get_conversation_history` | Retrieve conversation by session ID |
 
-### Group 3 -- RAG Chat (1)
-
-| Tool | Description |
-|------|-------------|
-| `shanebrain_chat` | Full RAG pipeline: search knowledge + Ollama generate |
-
-### Group 4 -- Social (2)
+### Group 3 -- Social (2)
 
 | Tool | Description |
 |------|-------------|
 | `shanebrain_search_friends` | Semantic search across FriendProfile |
 | `shanebrain_get_top_friends` | List friends sorted by interaction count |
 
-### Group 5 -- Vault (3)
+### Group 4 -- Vault (3)
 
 | Tool | Description |
 |------|-------------|
@@ -148,22 +140,20 @@ Or add to `~/.claude/mcp_servers.json`:
 | `shanebrain_vault_add` | Store a new vault document with category and tags |
 | `shanebrain_vault_list_categories` | List all vault categories with document counts |
 
-### Group 6 -- Notes (3)
+### Group 5 -- Notes (2)
 
 | Tool | Description |
 |------|-------------|
 | `shanebrain_daily_note_add` | Add a journal entry, todo, reminder, or reflection |
 | `shanebrain_daily_note_search` | Semantic search across DailyNote |
-| `shanebrain_daily_briefing` | Generate today's briefing from recent notes via Ollama |
 
-### Group 7 -- Drafts (2)
+### Group 6 -- Drafts (1)
 
 | Tool | Description |
 |------|-------------|
-| `shanebrain_draft_create` | AI-generate a draft (email, post, letter, etc.) with vault context |
 | `shanebrain_draft_search` | Search saved drafts by topic or type |
 
-### Group 8 -- Security (3)
+### Group 7 -- Security (3)
 
 | Tool | Description |
 |------|-------------|
@@ -171,21 +161,14 @@ Or add to `~/.claude/mcp_servers.json`:
 | `shanebrain_security_log_recent` | Chronological recent security events, filterable by severity |
 | `shanebrain_privacy_audit_search` | Search PrivacyAudit records |
 
-### Group 9 -- Weaviate Admin (2)
+### Group 8 -- Weaviate Admin (2)
 
 | Tool | Description |
 |------|-------------|
 | `shanebrain_rag_list_classes` | List all Weaviate collections with object counts |
 | `shanebrain_rag_delete` | Delete a Weaviate object by collection + UUID |
 
-### Group 10 -- Ollama (2)
-
-| Tool | Description |
-|------|-------------|
-| `shanebrain_ollama_generate` | Prompt the local LLM directly with optional system prompt |
-| `shanebrain_ollama_list_models` | List downloaded Ollama models with sizes |
-
-### Group 11 -- Planning (3)
+### Group 9 -- Planning (3)
 
 | Tool | Description |
 |------|-------------|
@@ -193,20 +176,20 @@ Or add to `~/.claude/mcp_servers.json`:
 | `shanebrain_plan_read` | Read a planning file's full content |
 | `shanebrain_plan_write` | Create or append to a planning file (path-traversal protected) |
 
-### Group 12 -- System (1)
+### Group 10 -- System (1)
 
 | Tool | Description |
 |------|-------------|
-| `shanebrain_system_health` | Ping Weaviate, Ollama, and Gateway; return latency dashboard |
+| `shanebrain_system_health` | Ping Weaviate and Gateway; return collection counts |
 
-### Group 13 -- Email (2)
+### Group 11 -- Email (2)
 
 | Tool | Description |
 |------|-------------|
 | `shanebrain_send_email` | Send an email from Shane's Gmail via SMTP (requires GMAIL_APP_PASSWORD env) |
 | `shanebrain_reply_email` | Reply to an email with proper thread headers (In-Reply-To, References) |
 
-### Group 14 -- Google Calendar (5)
+### Group 12 -- Google Calendar (5)
 
 | Tool | Description |
 |------|-------------|
@@ -218,6 +201,21 @@ Or add to `~/.claude/mcp_servers.json`:
 
 **Calendar setup:** Requires `gcal_token.json` at `GCAL_TOKEN_PATH` (default `/app/gcal_token.json`).
 Run `scripts/google_calendar_setup.py` to authenticate and generate the token.
+
+### Group 13 -- Context Snapshot (1)
+
+| Tool | Description |
+|------|-------------|
+| `shanebrain_context_snapshot` | Rich session-start snapshot — sobriety, mood, last 3 sessions, active projects, family context |
+
+### Group 14 -- Weaviate Session Tools (2)
+
+Persist and retrieve full Claude session transcripts so memory survives context resets.
+
+| Tool | Description |
+|------|-------------|
+| `weaviate_log_conversation` | Store a full session transcript in `Conversation` (timestamp, source, 200-char summary) |
+| `weaviate_get_context` | Return 5 most recent transcripts + context snapshot, formatted for CLAUDE.md injection |
 
 ---
 
@@ -237,11 +235,11 @@ JSON-RPC, and `/health` returns service status (HTTP 200 healthy, 503 degraded).
 ## Quality
 
 - Pydantic v2 `BaseModel` with `Field` constraints on every tool input
-- MCP annotations (`readOnlyHint`, `destructiveHint`, `idempotentHint`, `openWorldHint`) on all 42 tools
+- MCP annotations (`readOnlyHint`, `destructiveHint`, `idempotentHint`, `openWorldHint`) on all 32 tools
 - Actionable error messages with next-step suggestions
 - Logging to stderr only (never pollutes MCP stdout)
 - Async throughout, no blocking I/O
-- Lifespan manager validates Weaviate + Ollama connectivity at startup
+- Lifespan manager validates Weaviate connectivity at startup
 - Path traversal protection on filesystem tools (Planning)
 - `shanebrain_` prefix on all tool names to prevent conflicts
 
@@ -258,7 +256,7 @@ python3 test_smoke.py http://192.168.1.50:8100
 ```
 
 The smoke test initializes an MCP session, calls each tool group, and reports
-pass/fail counts. Slow tools (RAG chat, briefing, draft generation) are skipped.
+pass/fail counts.
 
 ---
 
@@ -266,9 +264,9 @@ pass/fail counts. Slow tools (RAG chat, briefing, draft generation) are skipped.
 
 | File | Purpose |
 |------|---------|
-| `shanebrain_mcp.py` | Main server (all 34 tools + health endpoint + lifespan) |
+| `shanebrain_mcp.py` | Main server (all 32 tools + health endpoint + lifespan) |
 | `weaviate_bridge.py` | DockerWeaviateHelper — Weaviate connection via Docker host network |
-| `health.py` | Health check functions for Weaviate, Ollama, and Gateway |
+| `health.py` | Health check functions for Weaviate and Gateway |
 | `requirements.txt` | Python dependencies |
 | `Dockerfile` | Container build (standalone; see note about weaviate_helpers.py) |
 | `test_smoke.py` | Smoke test suite for all tool groups |

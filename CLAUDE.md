@@ -2,7 +2,7 @@
 
 ## What this repo is
 
-Production MCP server for shanebrain-1 (Pi 5). 34 tools, 14 groups.
+Production MCP server for shanebrain-1 (Pi 5). 32 tools, 14 groups.
 Runs as Docker container on port 8100 with `--network host`.
 
 **Live server:** `/mnt/shanebrain-raid/shanebrain-core/mcp-server/`
@@ -12,9 +12,9 @@ Runs as Docker container on port 8100 with `--network host`.
 
 | File | Purpose |
 |------|---------|
-| `shanebrain_mcp.py` | All 34 tools — mirror of live `server.py` |
+| `shanebrain_mcp.py` | All 37 tools — mirror of live `server.py` |
 | `weaviate_bridge.py` | DockerWeaviateHelper subclass |
-| `health.py` | Weaviate / Ollama / Gateway health checks |
+| `health.py` | Weaviate / Gateway health checks |
 | `scripts/weaviate_helpers.py` | Base WeaviateHelper (shared with shanebrain-core) |
 | `docker-compose.yml` | Full deployment spec — authoritative |
 | `.env.example` | All env vars with defaults |
@@ -48,6 +48,50 @@ Runs as Docker container on port 8100 with `--network host`.
 All defined in `.env.example`. Required: `GMAIL_APP_PASSWORD`.
 Secrets are stored in Weaviate PersonalDoc (category `credentials`).
 Rebuild env file: `python3 scripts/env_from_vault.py`
+
+## Infra cutover (Phase 3)
+
+`.claude/infra.env` holds the variables that flip when the active Weaviate
+host changes (e.g. Pi 5 → neworleans). Scaffold lives at
+`.claude/infra.env.example` (committed). The actual `.claude/infra.env` is
+gitignored — per-host values only.
+
+Source before running scripts:
+```
+set -a; source .claude/infra.env; set +a
+```
+
+Cutover = edit `.claude/infra.env` and re-source. No code changes.
+Variables that are host-invariant (MCP_PORT, GCAL_*) stay in
+`.env` / `docker-compose.yml`.
+
+### Schema validation gate
+
+Before flipping `WEAVIATE_HOST` to a new primary (or promoting a replica
+to primary), confirm the target's schema matches the live one. Run from
+the source host so both `curl` calls hit the same network:
+
+```
+diff \
+  <(curl -sf "http://${WEAVIATE_HOST_FROM}:${WEAVIATE_PORT_FROM:-8080}/v1/schema" \
+      | python3 -c 'import sys,json; print("\n".join(sorted(c["class"] for c in json.load(sys.stdin)["classes"])))') \
+  <(curl -sf "http://${WEAVIATE_HOST_TO}:${WEAVIATE_PORT_TO:-8080}/v1/schema" \
+      | python3 -c 'import sys,json; print("\n".join(sorted(c["class"] for c in json.load(sys.stdin)["classes"])))') \
+  && echo "schema OK" || { echo "SCHEMA MISMATCH — abort cutover"; exit 1; }
+```
+
+If this fails: re-run `scripts/replica_sync.sh` (or rerun
+`scripts/setup_weaviate_schema.py` against the new host if it's a fresh
+install) and re-validate before proceeding. Do NOT cut over with a
+schema diff outstanding — clients will hit `class not found` errors at
+runtime.
+
+### Drift check
+
+Run `scripts/diff.py` (after sourcing `.claude/infra.env`) to compare
+object counts collection-by-collection between the local Pi and the
+configured primary. Exits non-zero if any collection drifts past
+`DRIFT_THRESHOLD_PCT` (default 0.5%). Suitable for nightly cron.
 
 ## Google Calendar setup
 
