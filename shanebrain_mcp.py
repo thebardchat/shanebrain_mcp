@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
 """
-ShaneBrain MCP Server v2.6
+ShaneBrain MCP Server v2.5
 ===========================
-32 tools across 14 groups — Ollama removed; embeddings via text2vec-transformers.
+37 tools across 16 groups — merged from Pi deployment + GitHub quality patterns.
 
-Groups: Knowledge (2), Chat (3), Social (2), Vault (3), Notes (2),
-        Drafts (1), Security (3), Weaviate Admin (2), Planning (3),
-        System (1), Email (2), Calendar (5), Context Snapshot (1),
+Groups: Knowledge (2), Chat (3), RAG Chat (1), Social (2), Vault (3),
+        Notes (3), Drafts (2), Security (3), Weaviate Admin (2),
+        Ollama (2), Planning (3), System (1), Email (2), Calendar (5),
         Weaviate Session (2)
 
 Transport: streamable-http on port 8100 (Docker), switchable to sse/stdio via --transport
@@ -23,13 +23,14 @@ from enum import Enum
 from pathlib import Path
 from typing import List, Optional
 
+import ollama as ollama_lib
 from mcp.server.fastmcp import FastMCP
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 from starlette.requests import Request
 from starlette.responses import JSONResponse
 from weaviate.classes.query import Filter
 
-from health import check_gateway, check_weaviate
+from health import check_gateway, check_ollama, check_weaviate
 from weaviate_bridge import DockerWeaviateHelper
 
 # ---------------------------------------------------------------------------
@@ -45,8 +46,11 @@ logger = logging.getLogger("shanebrain_mcp")
 # ---------------------------------------------------------------------------
 # Config
 # ---------------------------------------------------------------------------
+OLLAMA_HOST = os.environ.get("OLLAMA_HOST", "http://localhost:11434")
+OLLAMA_MODEL = os.environ.get("OLLAMA_MODEL", "shanebrain-3b:latest")
 PLANNING_DIR = Path(os.environ.get("PLANNING_DIR", "/app/planning"))
 MCP_PORT = int(os.environ.get("MCP_PORT", "8100"))
+RAG_CHUNK_LIMIT = 5
 
 
 # ---------------------------------------------------------------------------
@@ -63,6 +67,11 @@ def _weaviate():
     return DockerWeaviateHelper()
 
 
+def _ollama_client():
+    """Get an Ollama client with configured host."""
+    return ollama_lib.Client(host=OLLAMA_HOST, timeout=600)
+
+
 def _format_error(e: Exception, context: str = "") -> str:
     """Format errors with actionable hints."""
     prefix = f"[{context}] " if context else ""
@@ -76,13 +85,42 @@ def _format_error(e: Exception, context: str = "") -> str:
     return f"{prefix}{type(e).__name__}: {msg}"
 
 
+def _get_system_prompt():
+    """Build the ShaneBrain system prompt with family info."""
+    sobriety_days = (datetime.now() - datetime(2023, 11, 27)).days
+    sobriety_years = sobriety_days // 365
+    sobriety_months = (sobriety_days % 365) // 30
+
+    return f"""You are ShaneBrain - Shane Brazelton's AI, built to serve his family for generations.
+
+CRITICAL RULES:
+1. BE BRIEF: 2-4 sentences MAX unless asked for more
+2. NEVER HALLUCINATE: If you don't know, say "I don't know that yet"
+3. NO FLUFF: Never say "certainly", "I'd be happy to", "great question"
+4. FACTS ONLY: Only state what you know for certain
+
+FAMILY (Shane is the FATHER of all 5 sons):
+- Shane Brazelton: Father, Creator of ShaneBrain
+- Tiffany Brazelton: Wife, Mother
+- Gavin Brazelton: Eldest son, married to Angel
+- Kai Brazelton: Second son
+- Pierce Brazelton: Third son, has ADHD like Shane, wrestler
+- Jaxton Brazelton: Fourth son, wrestler
+- Ryker Brazelton: Youngest son
+- Angel Brazelton: Daughter-in-law, married to Gavin
+
+SOBRIETY: Shane has been sober since November 27, 2023 ({sobriety_years} years, {sobriety_months} months)
+
+Be direct. Be brief. Be accurate."""
+
+
 # ---------------------------------------------------------------------------
 # Lifespan — validate connectivity at startup
 # ---------------------------------------------------------------------------
 
 @asynccontextmanager
 async def lifespan(app: FastMCP):
-    logger.info("ShaneBrain MCP v2.6 starting — 32 tools, 14 groups")
+    logger.info("ShaneBrain MCP v2.5 starting — 37 tools, 16 groups")
     # Check Weaviate
     try:
         with _weaviate() as h:
@@ -92,6 +130,15 @@ async def lifespan(app: FastMCP):
                 logger.warning("Weaviate: NOT ready")
     except Exception as e:
         logger.warning("Weaviate: NOT reachable (%s)", e)
+    # Check Ollama
+    try:
+        status = check_ollama()
+        if status.get("status") == "ok":
+            logger.info("Ollama: reachable (%d models)", len(status.get("models", [])))
+        else:
+            logger.warning("Ollama: NOT ready")
+    except Exception as e:
+        logger.warning("Ollama: NOT reachable (%s)", e)
     # Ensure planning dirs
     PLANNING_DIR.mkdir(parents=True, exist_ok=True)
     for sub in ("active-projects", "templates", "completed", "logs"):
@@ -107,8 +154,8 @@ async def lifespan(app: FastMCP):
 mcp = FastMCP(
     "ShaneBrain",
     instructions=(
-        "ShaneBrain AI tools — knowledge, chat, social, vault, notes, "
-        "drafts, security, admin, planning, and system health."
+        "ShaneBrain AI tools — knowledge, chat, RAG, social, vault, notes, "
+        "drafts, security, admin, ollama, planning, and system health."
     ),
     host="0.0.0.0",
     port=MCP_PORT,
@@ -253,7 +300,68 @@ def shanebrain_get_conversation_history(params: GetConversationHistoryInput) -> 
 
 
 # ===========================================================================
-# GROUP 3: Social (FriendProfile) — 2 tools
+# GROUP 3: RAG Chat — 1 tool
+# ===========================================================================
+
+class ChatInput(BaseModel):
+    model_config = ConfigDict(str_strip_whitespace=True, extra="forbid")
+    message: str = Field(..., description="Your message to ShaneBrain", min_length=1, max_length=2000)
+    model: str = Field(default="", description="Ollama model override (default: OLLAMA_MODEL env)")
+    temperature: float = Field(default=0.3, ge=0.0, le=2.0)
+    max_tokens: int = Field(default=100, ge=1, le=4096)
+
+
+@mcp.tool(
+    name="shanebrain_chat",
+    annotations={"readOnlyHint": True, "destructiveHint": False, "idempotentHint": False, "openWorldHint": False},
+)
+def shanebrain_chat(params: ChatInput) -> str:
+    """Full RAG chat — searches knowledge base, then generates via local Ollama.
+
+    Pipeline: semantic search LegacyKnowledge -> inject context -> Ollama generate.
+    100% local, zero cloud. Uses ShaneBrain persona with family knowledge.
+    """
+    try:
+        with _weaviate() as h:
+            # RAG retrieval
+            chunks = []
+            results = h.search_knowledge(params.message, limit=RAG_CHUNK_LIMIT)
+            for r in results:
+                content = r.get("content", "")
+                title = r.get("title", "")
+                if content:
+                    chunks.append(f"[{title}]\n{content}" if title else content)
+
+            # Build prompt
+            system = _get_system_prompt()
+            if chunks:
+                context = "\n\n---\n\n".join(chunks)
+                system += f"\n\nRELEVANT KNOWLEDGE FROM MEMORY:\n{context}\n\nUse this knowledge to answer. If it doesn't help, say you don't know."
+
+            # Generate
+            model = params.model or OLLAMA_MODEL
+            client = _ollama_client()
+            response = client.chat(
+                model=model,
+                messages=[
+                    {"role": "system", "content": system},
+                    {"role": "user", "content": params.message},
+                ],
+                options={"temperature": params.temperature, "num_predict": params.max_tokens},
+                keep_alive="10m",
+            )
+
+            return json.dumps({
+                "response": response["message"]["content"],
+                "knowledge_chunks_used": len(chunks),
+                "model": model,
+            })
+    except Exception as e:
+        return _format_error(e, "shanebrain_chat")
+
+
+# ===========================================================================
+# GROUP 4: Social (FriendProfile) — 2 tools
 # ===========================================================================
 
 class SearchFriendsInput(BaseModel):
@@ -296,7 +404,7 @@ def shanebrain_get_top_friends(params: GetTopFriendsInput) -> str:
 
 
 # ===========================================================================
-# GROUP 4: Vault (PersonalDoc) — 3 tools
+# GROUP 5: Vault (PersonalDoc) — 3 tools
 # ===========================================================================
 
 class VaultSearchInput(BaseModel):
@@ -384,7 +492,7 @@ def shanebrain_vault_list_categories(params: VaultListCategoriesInput) -> str:
 
 
 # ===========================================================================
-# GROUP 5: Notes (DailyNote) — 2 tools
+# GROUP 6: Notes (DailyNote) — 3 tools
 # ===========================================================================
 
 class DailyNoteAddInput(BaseModel):
@@ -444,9 +552,113 @@ def shanebrain_daily_note_search(params: DailyNoteSearchInput) -> str:
         return _format_error(e, "shanebrain_daily_note_search")
 
 
+@mcp.tool(
+    name="shanebrain_daily_briefing",
+    annotations={"readOnlyHint": True, "destructiveHint": False, "idempotentHint": False, "openWorldHint": False},
+)
+def shanebrain_daily_briefing() -> str:
+    """AI-generated daily briefing summarizing recent notes via Ollama."""
+    try:
+        with _weaviate() as h:
+            if not h.collection_exists("DailyNote"):
+                return json.dumps({"error": "DailyNote collection does not exist yet."})
+
+            notes = h._generic_fetch("DailyNote", limit=20)
+            if not notes:
+                return json.dumps({"briefing": "No daily notes found.", "note_count": 0})
+
+            note_texts = []
+            for n in notes:
+                ntype = n.get("note_type", "note")
+                content = n.get("content", "")
+                date = n.get("date", "")
+                note_texts.append(f"[{date} - {ntype}] {content}")
+
+            client = _ollama_client()
+            response = client.chat(
+                model=OLLAMA_MODEL,
+                messages=[
+                    {"role": "system", "content": "You are ShaneBrain. Summarize these daily notes into a brief daily briefing. Be concise — bullet points preferred."},
+                    {"role": "user", "content": f"Here are recent notes:\n\n" + "\n".join(note_texts) + "\n\nGive me a daily briefing."},
+                ],
+                options={"temperature": 0.3, "num_predict": 100},
+                keep_alive="10m",
+            )
+            return json.dumps({
+                "briefing": response["message"]["content"],
+                "note_count": len(notes),
+            })
+    except Exception as e:
+        return _format_error(e, "shanebrain_daily_briefing")
+
+
 # ===========================================================================
-# GROUP 6: Drafts (PersonalDraft) — 1 tool
+# GROUP 7: Drafts (PersonalDraft) — 2 tools
 # ===========================================================================
+
+class DraftCreateInput(BaseModel):
+    model_config = ConfigDict(str_strip_whitespace=True, extra="forbid")
+    prompt: str = Field(..., description="What to write about", min_length=1, max_length=2000)
+    draft_type: str = Field(default="general", description="Type: email, message, post, letter, general")
+    use_vault_context: bool = Field(default=True, description="Search PersonalDoc for context (default True)")
+
+
+@mcp.tool(
+    name="shanebrain_draft_create",
+    annotations={"readOnlyHint": False, "destructiveHint": False, "idempotentHint": False, "openWorldHint": False},
+)
+def shanebrain_draft_create(params: DraftCreateInput) -> str:
+    """Generate a writing draft with optional vault context via Ollama.
+
+    Searches PersonalDoc for relevant context, then generates in Shane's voice.
+    Saves the result to PersonalDraft collection.
+    """
+    try:
+        with _weaviate() as h:
+            context_chunks = []
+            if params.use_vault_context and h.collection_exists("PersonalDoc"):
+                results = h._generic_near_text("PersonalDoc", params.prompt, limit=3)
+                for r in results:
+                    content = r.get("content", "")
+                    if content:
+                        context_chunks.append(content)
+
+            system = "You are ShaneBrain, helping Shane draft content. Match his voice: direct, warm, no fluff."
+            if context_chunks:
+                system += f"\n\nRelevant context from vault:\n" + "\n---\n".join(context_chunks)
+
+            client = _ollama_client()
+            response = client.chat(
+                model=OLLAMA_MODEL,
+                messages=[
+                    {"role": "system", "content": system},
+                    {"role": "user", "content": f"Draft a {params.draft_type}: {params.prompt}"},
+                ],
+                options={"temperature": 0.5, "num_predict": 150},
+                keep_alive="10m",
+            )
+
+            draft_text = response["message"]["content"]
+
+            saved_uuid = None
+            if h.collection_exists("PersonalDraft"):
+                saved_uuid = h._generic_insert("PersonalDraft", {
+                    "content": draft_text,
+                    "prompt": params.prompt,
+                    "draft_type": params.draft_type,
+                    "timestamp": datetime.now(timezone.utc).isoformat(),
+                })
+
+            return json.dumps({
+                "draft": draft_text,
+                "draft_type": params.draft_type,
+                "saved": saved_uuid is not None,
+                "uuid": saved_uuid,
+                "vault_context_used": len(context_chunks),
+            })
+    except Exception as e:
+        return _format_error(e, "shanebrain_draft_create")
+
 
 class DraftSearchInput(BaseModel):
     model_config = ConfigDict(str_strip_whitespace=True, extra="forbid")
@@ -475,7 +687,7 @@ def shanebrain_draft_search(params: DraftSearchInput) -> str:
 
 
 # ===========================================================================
-# GROUP 7: Security (SecurityLog, PrivacyAudit) — 3 tools
+# GROUP 8: Security (SecurityLog, PrivacyAudit) — 3 tools
 # ===========================================================================
 
 class SecurityLogSearchInput(BaseModel):
@@ -556,7 +768,7 @@ def shanebrain_privacy_audit_search(params: PrivacyAuditSearchInput) -> str:
 
 
 # ===========================================================================
-# GROUP 8: Weaviate Admin — 2 tools
+# GROUP 9: Weaviate Admin — 2 tools (NEW from GitHub)
 # ===========================================================================
 
 class RagDeleteInput(BaseModel):
@@ -617,7 +829,84 @@ def shanebrain_rag_list_classes(params: RagListClassesInput) -> str:
 
 
 # ===========================================================================
-# GROUP 9: Planning System — 3 tools
+# GROUP 10: Ollama Local Inference — 2 tools (NEW from GitHub)
+# ===========================================================================
+
+class OllamaGenerateInput(BaseModel):
+    model_config = ConfigDict(str_strip_whitespace=True, extra="forbid")
+    prompt: str = Field(..., description="Prompt or question for the local model", min_length=1, max_length=8000)
+    model: str = Field(default="", description="Ollama model name (default: OLLAMA_MODEL env)")
+    system_prompt: Optional[str] = Field(default=None, description="Optional system prompt", max_length=2000)
+    temperature: float = Field(default=0.7, ge=0.0, le=2.0)
+    max_tokens: int = Field(default=512, ge=1, le=4096)
+
+
+@mcp.tool(
+    name="shanebrain_ollama_generate",
+    annotations={"readOnlyHint": True, "destructiveHint": False, "idempotentHint": False, "openWorldHint": False},
+)
+def shanebrain_ollama_generate(params: OllamaGenerateInput) -> str:
+    """Generate text using a locally-running Ollama model. Zero cloud dependency.
+
+    For RAG-grounded answers use shanebrain_chat instead. This tool is for
+    direct generation without knowledge base context.
+    """
+    try:
+        model = params.model or OLLAMA_MODEL
+        client = _ollama_client()
+        response = client.generate(
+            model=model,
+            prompt=params.prompt,
+            system=params.system_prompt or "",
+            options={"temperature": params.temperature, "num_predict": params.max_tokens},
+            keep_alive="10m",
+        )
+        text = response.get("response", "").strip()
+        eval_count = response.get("eval_count", 0)
+        total_ns = response.get("total_duration", 0)
+        return json.dumps({
+            "response": text,
+            "model": model,
+            "tokens": eval_count,
+            "duration_s": round(total_ns / 1e9, 1) if total_ns else 0,
+        })
+    except Exception as e:
+        return _format_error(e, "shanebrain_ollama_generate")
+
+
+class OllamaListModelsInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    response_format: ResponseFormat = Field(default=ResponseFormat.MARKDOWN)
+
+
+@mcp.tool(
+    name="shanebrain_ollama_list_models",
+    annotations={"readOnlyHint": True, "destructiveHint": False, "idempotentHint": True, "openWorldHint": False},
+)
+def shanebrain_ollama_list_models(params: OllamaListModelsInput) -> str:
+    """List all Ollama models currently downloaded on this Pi."""
+    try:
+        client = _ollama_client()
+        data = client.list()
+        models = data.get("models", [])
+        if not models:
+            return "No models found. Pull one: `ollama pull llama3.2:1b`"
+
+        if params.response_format == ResponseFormat.MARKDOWN:
+            lines = ["## Local Ollama Models\n", "| Model | Size | Modified |", "|-------|------|----------|"]
+            for m in models:
+                name = m.get("name", "?")
+                size_gb = m.get("size", 0) / 1e9
+                modified = str(m.get("modified_at", ""))[:10]
+                lines.append(f"| `{name}` | {size_gb:.1f} GB | {modified} |")
+            return "\n".join(lines)
+        return json.dumps({"models": models}, default=str)
+    except Exception as e:
+        return _format_error(e, "shanebrain_ollama_list_models")
+
+
+# ===========================================================================
+# GROUP 11: Planning System — 3 tools (NEW from GitHub)
 # ===========================================================================
 
 class PlanListInput(BaseModel):
@@ -739,7 +1028,7 @@ def shanebrain_plan_write(params: PlanWriteInput) -> str:
 
 
 # ===========================================================================
-# GROUP 10: System Health — 1 tool
+# GROUP 12: System Health — 1 tool
 # ===========================================================================
 
 @mcp.tool(
@@ -747,16 +1036,18 @@ def shanebrain_plan_write(params: PlanWriteInput) -> str:
     annotations={"readOnlyHint": True, "destructiveHint": False, "idempotentHint": False, "openWorldHint": False},
 )
 def shanebrain_system_health() -> str:
-    """Check ShaneBrain system health — Weaviate, Gateway + all collection counts."""
+    """Check ShaneBrain system health — Weaviate, Ollama, Gateway + all collection counts."""
     try:
         with _weaviate() as h:
             weaviate_status = check_weaviate(h)
+            ollama_status = check_ollama()
             gateway_status = check_gateway()
             counts = h.get_all_collection_counts()
 
             return json.dumps({
                 "services": {
                     "weaviate": weaviate_status,
+                    "ollama": ollama_status,
                     "gateway": gateway_status,
                 },
                 "collections": counts,
@@ -768,7 +1059,7 @@ def shanebrain_system_health() -> str:
 
 
 # ===========================================================================
-# GROUP 11: Email — 2 tools (send + reply via Gmail SMTP)
+# GROUP 13: Email — 2 tools (send + reply via Gmail SMTP)
 # ===========================================================================
 
 GMAIL_USER = "brazeltonshane@gmail.com"
@@ -854,7 +1145,7 @@ def shanebrain_reply_email(params: EmailReplyInput) -> str:
 
 
 # ===========================================================================
-# GROUP 12: Google Calendar — 5 tools (list, get, create, update, delete)
+# GROUP 14: Google Calendar — 5 tools (list, get, create, update, delete)
 # ===========================================================================
 
 GCAL_TOKEN_PATH = Path(os.environ.get("GCAL_TOKEN_PATH", "/app/gcal_token.json"))
@@ -1155,18 +1446,21 @@ async def http_health(request: Request) -> JSONResponse:
     except Exception:
         weaviate_ok = False
 
+    healthy = weaviate_ok
+
     return JSONResponse(
-        status_code=200 if weaviate_ok else 503,
+        status_code=200 if healthy else 503,
         content={
-            "status": "healthy" if weaviate_ok else "degraded",
+            "status": "healthy" if healthy else "degraded",
             "weaviate": "ok" if weaviate_ok else "down",
-            "version": "2.6.0",
+            "ollama": "disabled",
+            "version": "2.3.0",
         },
     )
 
 
 # ===========================================================================
-# GROUP 13: Context Snapshot — 1 tool
+# GROUP 15: Context Snapshot — 1 tool
 # Returns a rich Shane-context object for session start injection
 # ===========================================================================
 
@@ -1268,7 +1562,7 @@ def shanebrain_context_snapshot() -> str:
 
 
 # ===========================================================================
-# GROUP 14: Weaviate Session Tools — 2 tools
+# GROUP 16: Weaviate Session Tools — 2 tools
 # weaviate_log_conversation: store a full session transcript
 # weaviate_get_context: retrieve recent sessions for CLAUDE.md injection
 # ===========================================================================
@@ -1286,7 +1580,7 @@ class WeaviateLogConversationInput(BaseModel):
 def weaviate_log_conversation(params: WeaviateLogConversationInput) -> str:
     """Log a full session transcript to Weaviate's Conversation collection.
 
-    Vectorized via text2vec-transformers. Stores transcript, source,
+    Vectorized via nomic-embed-text (text2vec-ollama). Stores transcript, source,
     timestamp, and 200-char summary. Designed to be called from claude.ai via MCP
     at session end.
     """
