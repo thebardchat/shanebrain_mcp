@@ -54,6 +54,21 @@ PLANNING_DIR = Path(os.environ.get("PLANNING_DIR", "/app/planning"))
 MCP_PORT = int(os.environ.get("MCP_PORT", "8100"))
 RAG_CHUNK_LIMIT = 5
 
+# Daily briefing constants
+SOBER_SINCE = date(2023, 11, 27)
+WEDDING_DATE = date(2026, 5, 26)
+BOOK2_PATH = Path(os.environ.get("BOOK2_PATH", "/app/book2/volume-two/compiled/draft-001.md"))
+CLUSTER_NODES = ["shanebrain", "ultra", "pulsar", "bullfrog", "mexico", "gulfshores", "neworleans", "jaxton"]
+_VERSES = [
+    ("Psalm 27:11", "Teach me your way, O Lord; lead me in a straight path."),
+    ("Proverbs 3:5-6", "Trust in the Lord with all your heart and lean not on your own understanding."),
+    ("Isaiah 40:31", "Those who hope in the Lord will renew their strength. They will soar on wings like eagles."),
+    ("Philippians 4:13", "I can do all things through Christ who strengthens me."),
+    ("Joshua 1:9", "Be strong and courageous. Do not be afraid; do not be discouraged."),
+    ("Romans 8:28", "And we know that in all things God works for the good of those who love him."),
+    ("Proverbs 16:3", "Commit to the Lord whatever you do, and he will establish your plans."),
+]
+
 
 # ---------------------------------------------------------------------------
 # Shared helpers
