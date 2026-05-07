@@ -84,11 +84,6 @@ def _weaviate():
     return DockerWeaviateHelper()
 
 
-def _ollama_client():
-    """Get an Ollama client with configured host."""
-    return ollama_lib.Client(host=OLLAMA_HOST, timeout=600)
-
-
 def _claude_generate(system: str, user: str, max_tokens: int = 256, temperature: float = 0.7) -> str:
     """Generate text via Claude Haiku. Returns the response string."""
     client = anthropic_lib.Anthropic(api_key=ANTHROPIC_API_KEY)
