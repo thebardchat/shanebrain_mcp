@@ -938,25 +938,8 @@ class OllamaListModelsInput(BaseModel):
     annotations={"readOnlyHint": True, "destructiveHint": False, "idempotentHint": True, "openWorldHint": False},
 )
 def shanebrain_ollama_list_models(params: OllamaListModelsInput) -> str:
-    """List all Ollama models currently downloaded on this Pi."""
-    try:
-        client = _ollama_client()
-        data = client.list()
-        models = data.get("models", [])
-        if not models:
-            return "No models found. Pull one: `ollama pull llama3.2:1b`"
-
-        if params.response_format == ResponseFormat.MARKDOWN:
-            lines = ["## Local Ollama Models\n", "| Model | Size | Modified |", "|-------|------|----------|"]
-            for m in models:
-                name = m.get("name", "?")
-                size_gb = m.get("size", 0) / 1e9
-                modified = str(m.get("modified_at", ""))[:10]
-                lines.append(f"| `{name}` | {size_gb:.1f} GB | {modified} |")
-            return "\n".join(lines)
-        return json.dumps({"models": models}, default=str)
-    except Exception as e:
-        return _format_error(e, "shanebrain_ollama_list_models")
+    """Ollama decommissioned 2026-04-30. Returns status message."""
+    return "Ollama decommissioned 2026-04-30. All inference now routes through Claude Haiku (claude-haiku-4-5-20251001). No local models running."
 
 
 # ===========================================================================
