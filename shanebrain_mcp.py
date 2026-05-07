@@ -26,7 +26,6 @@ from pathlib import Path
 from typing import List, Optional
 
 import anthropic as anthropic_lib
-import ollama as ollama_lib
 from mcp.server.fastmcp import FastMCP
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 from starlette.requests import Request
