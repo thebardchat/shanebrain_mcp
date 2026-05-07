@@ -1600,7 +1600,7 @@ class WeaviateLogConversationInput(BaseModel):
 def weaviate_log_conversation(params: WeaviateLogConversationInput) -> str:
     """Log a full session transcript to Weaviate's Conversation collection.
 
-    Vectorized via nomic-embed-text (text2vec-ollama). Stores transcript, source,
+    Vectorized via text2vec-transformers (MiniLM-L6-v2). Stores transcript, source,
     timestamp, and 200-char summary. Designed to be called from claude.ai via MCP
     at session end.
     """
