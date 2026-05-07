@@ -362,7 +362,7 @@ def shanebrain_get_conversation_history(params: GetConversationHistoryInput) -> 
 class ChatInput(BaseModel):
     model_config = ConfigDict(str_strip_whitespace=True, extra="forbid")
     message: str = Field(..., description="Your message to ShaneBrain", min_length=1, max_length=2000)
-    model: str = Field(default="", description="Ollama model override (default: OLLAMA_MODEL env)")
+    model: str = Field(default="", description="Unused — inference is Claude Haiku")
     temperature: float = Field(default=0.3, ge=0.0, le=2.0)
     max_tokens: int = Field(default=100, ge=1, le=4096)
 
