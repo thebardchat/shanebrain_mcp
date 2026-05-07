@@ -89,6 +89,38 @@ def _ollama_client():
     return ollama_lib.Client(host=OLLAMA_HOST, timeout=600)
 
 
+def _check_node(hostname: str) -> tuple[str, str]:
+    """TCP-ping a cluster node on port 22. Returns (hostname, status)."""
+    try:
+        socket.create_connection((hostname, 22), timeout=1.0).close()
+        return hostname, "green"
+    except ConnectionRefusedError:
+        return hostname, "green"  # host up, SSH just refused
+    except OSError:
+        return hostname, "red"
+
+
+def _cluster_health() -> dict[str, str]:
+    with concurrent.futures.ThreadPoolExecutor(max_workers=8) as pool:
+        results = pool.map(_check_node, CLUSTER_NODES)
+    return dict(results)
+
+
+def _ensure_thoughts_collection(h) -> None:
+    if h.collection_exists("Thoughts"):
+        return
+    import weaviate.classes.config as wcc
+    h.client.collections.create(
+        name="Thoughts",
+        vectorizer_config=wcc.Configure.Vectorizer.text2vec_transformers(),
+        properties=[
+            wcc.Property(name="content", data_type=wcc.DataType.TEXT),
+            wcc.Property(name="timestamp", data_type=wcc.DataType.DATE),
+            wcc.Property(name="mood", data_type=wcc.DataType.TEXT),
+        ],
+    )
+
+
 def _format_error(e: Exception, context: str = "") -> str:
     """Format errors with actionable hints."""
     prefix = f"[{context}] " if context else ""
