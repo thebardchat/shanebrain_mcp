@@ -25,6 +25,7 @@ from enum import Enum
 from pathlib import Path
 from typing import List, Optional
 
+import anthropic as anthropic_lib
 import ollama as ollama_lib
 from mcp.server.fastmcp import FastMCP
 from pydantic import BaseModel, ConfigDict, Field, field_validator
@@ -50,6 +51,8 @@ logger = logging.getLogger("shanebrain_mcp")
 # ---------------------------------------------------------------------------
 OLLAMA_HOST = os.environ.get("OLLAMA_HOST", "http://localhost:11434")
 OLLAMA_MODEL = os.environ.get("OLLAMA_MODEL", "shanebrain-3b:latest")
+ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY", "")
+CLAUDE_MODEL = "claude-haiku-4-5-20251001"
 PLANNING_DIR = Path(os.environ.get("PLANNING_DIR", "/app/planning"))
 MCP_PORT = int(os.environ.get("MCP_PORT", "8100"))
 RAG_CHUNK_LIMIT = 5
