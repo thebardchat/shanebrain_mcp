@@ -1065,18 +1065,17 @@ def shanebrain_plan_write(params: PlanWriteInput) -> str:
     annotations={"readOnlyHint": True, "destructiveHint": False, "idempotentHint": False, "openWorldHint": False},
 )
 def shanebrain_system_health() -> str:
-    """Check ShaneBrain system health — Weaviate, Ollama, Gateway + all collection counts."""
+    """Check ShaneBrain system health — Weaviate, Gateway + all collection counts."""
     try:
         with _weaviate() as h:
             weaviate_status = check_weaviate(h)
-            ollama_status = check_ollama()
             gateway_status = check_gateway()
             counts = h.get_all_collection_counts()
 
             return json.dumps({
                 "services": {
                     "weaviate": weaviate_status,
-                    "ollama": ollama_status,
+                    "inference": {"status": "ok", "service": "claude-haiku", "model": CLAUDE_MODEL},
                     "gateway": gateway_status,
                 },
                 "collections": counts,

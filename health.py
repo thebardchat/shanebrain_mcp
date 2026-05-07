@@ -7,7 +7,6 @@ import os
 import requests
 
 
-OLLAMA_HOST = os.environ.get("OLLAMA_HOST", "http://localhost:11434")
 GATEWAY_HOST = os.environ.get("GATEWAY_HOST", "http://host.docker.internal:4200")
 
 
