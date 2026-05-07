@@ -1704,6 +1704,127 @@ def weaviate_get_context() -> str:
 
 
 # ===========================================================================
+# MCP App resource — Daily Briefing UI
+# ===========================================================================
+
+BRIEFING_HTML = """<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1"/>
+<title>ShaneBrain Daily Briefing</title>
+<style>
+  :root{--bg:#0a0e1a;--cyan:#00f0ff;--magenta:#ff006e;--text:#e8eef5;--dim:#7a8a9a;--green:#00ff88;--red:#ff3355;--yellow:#ffd700}
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{background:var(--bg);color:var(--text);font-family:'Courier New',monospace;height:100vh;overflow:hidden;display:flex;align-items:center;justify-content:center}
+  #panel{width:100%;max-width:640px;max-height:600px;padding:24px;border:1px solid var(--cyan);box-shadow:0 0 20px rgba(0,240,255,.15);display:flex;flex-direction:column;gap:16px}
+  .headline{text-align:center;font-size:2.6rem;font-weight:700;color:var(--cyan);letter-spacing:4px;text-shadow:0 0 12px var(--cyan)}
+  .sub{text-align:center;color:var(--dim);font-size:.75rem;letter-spacing:2px;text-transform:uppercase}
+  .divider{border:none;border-top:1px solid rgba(0,240,255,.2)}
+  .row{display:flex;justify-content:space-between;align-items:baseline;gap:8px}
+  .label{color:var(--dim);font-size:.7rem;text-transform:uppercase;letter-spacing:1px;white-space:nowrap}
+  .value{color:var(--text);font-size:.85rem;text-align:right}
+  .verse-block{border-left:2px solid var(--magenta);padding-left:10px}
+  .verse-ref{color:var(--magenta);font-size:.7rem;letter-spacing:1px;margin-bottom:3px}
+  .verse-text{color:var(--text);font-size:.8rem;font-style:italic;line-height:1.5}
+  .cluster{display:flex;flex-wrap:wrap;gap:6px}
+  .node{display:flex;align-items:center;gap:4px;font-size:.7rem;color:var(--dim)}
+  .dot{width:7px;height:7px;border-radius:50%}
+  .dot-green{background:var(--green);box-shadow:0 0 6px var(--green)}
+  .dot-red{background:var(--red);box-shadow:0 0 6px var(--red)}
+  .dot-unknown{background:var(--yellow)}
+  .thoughts{display:flex;flex-direction:column;gap:6px;overflow:hidden}
+  .thought{font-size:.75rem;color:var(--dim);border-left:1px solid rgba(255,0,110,.3);padding-left:8px;line-height:1.4;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .loading{text-align:center;color:var(--dim);font-size:.8rem;letter-spacing:2px;animation:pulse 1.4s ease-in-out infinite}
+  @keyframes pulse{0%,100%{opacity:.4}50%{opacity:1}}
+</style>
+</head>
+<body>
+<div id="panel">
+  <div class="loading" id="loading">INITIALIZING SHANEBRAIN...</div>
+  <div id="content" style="display:none;display:flex;flex-direction:column;gap:16px"></div>
+</div>
+<script>
+(function(){
+  var buf=null, initialized=false;
+
+  function render(d){
+    var el=document.getElementById('content');
+    el.style.display='flex';
+    document.getElementById('loading').style.display='none';
+    var wdays=d.wedding_days>0?d.wedding_days+' days':'TODAY';
+    var cluster='';
+    if(d.cluster){Object.keys(d.cluster).forEach(function(n){
+      var s=d.cluster[n];
+      cluster+='<span class="node"><span class="dot dot-'+(s==='green'?'green':'red')+'"></span>'+n+'</span>';
+    });}
+    var thoughts='';
+    if(d.thoughts&&d.thoughts.length){d.thoughts.forEach(function(t){
+      thoughts+='<div class="thought">'+(t.content||'').slice(0,90)+'</div>';
+    });}else{thoughts='<div class="thought" style="font-style:italic">No thoughts yet.</div>';}
+    el.innerHTML=
+      '<div class="headline">'+d.sober_days+'</div>'+
+      '<div class="sub">days sober &nbsp;&#9679;&nbsp; '+d.today+'</div>'+
+      '<hr class="divider"/>'+
+      '<div class="verse-block">'+
+        '<div class="verse-ref">'+d.verse_ref+'</div>'+
+        '<div class="verse-text">'+d.verse_text+'</div>'+
+      '</div>'+
+      '<hr class="divider"/>'+
+      '<div class="row"><span class="label">Book II words</span><span class="value">'+d.book2_words.toLocaleString()+'</span></div>'+
+      '<div class="row"><span class="label">Gavin\'s wedding</span><span class="value">'+wdays+'</span></div>'+
+      '<hr class="divider"/>'+
+      '<div class="label" style="margin-bottom:4px">Cluster</div>'+
+      '<div class="cluster">'+cluster+'</div>'+
+      (d.thoughts&&d.thoughts.length?'<hr class="divider"/><div class="label" style="margin-bottom:4px">Recent thoughts</div><div class="thoughts">'+thoughts+'</div>':'');
+  }
+
+  function processResult(payload){
+    try{
+      var data=typeof payload==='string'?JSON.parse(payload):payload;
+      if(data.sober_days!==undefined){render(data);return;}
+      if(data.content&&Array.isArray(data.content)){
+        for(var i=0;i<data.content.length;i++){
+          if(data.content[i].type==='text'){render(JSON.parse(data.content[i].text));return;}
+        }
+      }
+    }catch(e){document.getElementById('loading').textContent='Error: '+e.message;}
+  }
+
+  window.addEventListener('message',function(ev){
+    if(ev.source!==window.parent)return;
+    var msg=ev.data;
+    if(!msg||!msg.method)return;
+    if(msg.method==='ui/initialize'){
+      initialized=true;
+      window.parent.postMessage({jsonrpc:'2.0',method:'ui/notifications/initialized',params:{}}, '*');
+      if(buf!==null){processResult(buf);buf=null;}
+    }
+    if(msg.method==='ui/notifications/tool-result'){
+      if(!initialized){buf=msg.params;return;}
+      processResult(msg.params);
+    }
+  });
+
+  // handshake kick-off
+  window.parent.postMessage({jsonrpc:'2.0',method:'ui/initialize',params:{
+    appInfo:{name:'ShaneBrain Daily Briefing',version:'1.0.0'},
+    appCapabilities:{},
+    protocolVersion:'2026-01-26'
+  }}, '*');
+})();
+</script>
+</body>
+</html>"""
+
+
+@mcp.resource("ui://shanebrain/briefing", mime_type="text/html;profile=mcp-app")
+def briefing_ui() -> str:
+    """MCP App UI resource for the daily briefing."""
+    return BRIEFING_HTML
+
+
+# ===========================================================================
 # Entry point
 # ===========================================================================
 
