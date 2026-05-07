@@ -402,23 +402,18 @@ def shanebrain_chat(params: ChatInput) -> str:
                 context = "\n\n---\n\n".join(chunks)
                 system += f"\n\nRELEVANT KNOWLEDGE FROM MEMORY:\n{context}\n\nUse this knowledge to answer. If it doesn't help, say you don't know."
 
-            # Generate
-            model = params.model or OLLAMA_MODEL
-            client = _ollama_client()
-            response = client.chat(
-                model=model,
-                messages=[
-                    {"role": "system", "content": system},
-                    {"role": "user", "content": params.message},
-                ],
-                options={"temperature": params.temperature, "num_predict": params.max_tokens},
-                keep_alive="10m",
+            # Generate via Claude Haiku (Ollama decommissioned 2026-04-30)
+            response_text = _claude_generate(
+                system=system,
+                user=params.message,
+                max_tokens=params.max_tokens,
+                temperature=params.temperature,
             )
 
             return json.dumps({
-                "response": response["message"]["content"],
+                "response": response_text,
                 "knowledge_chunks_used": len(chunks),
-                "model": model,
+                "model": CLAUDE_MODEL,
             })
     except Exception as e:
         return _format_error(e, "shanebrain_chat")
@@ -699,18 +694,12 @@ def shanebrain_draft_create(params: DraftCreateInput) -> str:
             if context_chunks:
                 system += f"\n\nRelevant context from vault:\n" + "\n---\n".join(context_chunks)
 
-            client = _ollama_client()
-            response = client.chat(
-                model=OLLAMA_MODEL,
-                messages=[
-                    {"role": "system", "content": system},
-                    {"role": "user", "content": f"Draft a {params.draft_type}: {params.prompt}"},
-                ],
-                options={"temperature": 0.5, "num_predict": 150},
-                keep_alive="10m",
+            draft_text = _claude_generate(
+                system=system,
+                user=f"Draft a {params.draft_type}: {params.prompt}",
+                max_tokens=150,
+                temperature=0.5,
             )
-
-            draft_text = response["message"]["content"]
 
             saved_uuid = None
             if h.collection_exists("PersonalDraft"):
