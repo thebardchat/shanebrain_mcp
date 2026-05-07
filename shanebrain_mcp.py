@@ -58,7 +58,7 @@ RAG_CHUNK_LIMIT = 5
 SOBER_SINCE = date(2023, 11, 27)
 WEDDING_DATE = date(2026, 5, 26)
 BOOK2_PATH = Path(os.environ.get("BOOK2_PATH", "/app/book2/volume-two/compiled/draft-001.md"))
-CLUSTER_NODES = ["shanebrain", "ultra", "pulsar", "bullfrog", "mexico", "gulfshores", "neworleans", "jaxton"]
+CLUSTER_NODES = ["shanebrain", "ultra", "pulsar", "bullfrog", "mexico", "gulfshores", "neworleans"]
 _VERSES = [
     ("Psalm 27:11", "Teach me your way, O Lord; lead me in a straight path."),
     ("Proverbs 3:5-6", "Trust in the Lord with all your heart and lean not on your own understanding."),
