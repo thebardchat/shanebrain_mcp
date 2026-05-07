@@ -907,29 +907,22 @@ class OllamaGenerateInput(BaseModel):
     annotations={"readOnlyHint": True, "destructiveHint": False, "idempotentHint": False, "openWorldHint": False},
 )
 def shanebrain_ollama_generate(params: OllamaGenerateInput) -> str:
-    """Generate text using a locally-running Ollama model. Zero cloud dependency.
+    """Generate text using Claude Haiku (Ollama decommissioned 2026-04-30).
 
     For RAG-grounded answers use shanebrain_chat instead. This tool is for
     direct generation without knowledge base context.
     """
     try:
-        model = params.model or OLLAMA_MODEL
-        client = _ollama_client()
-        response = client.generate(
-            model=model,
-            prompt=params.prompt,
-            system=params.system_prompt or "",
-            options={"temperature": params.temperature, "num_predict": params.max_tokens},
-            keep_alive="10m",
+        system = params.system_prompt or "You are ShaneBrain, Shane Brazelton's personal AI. Be direct and brief."
+        text = _claude_generate(
+            system=system,
+            user=params.prompt,
+            max_tokens=params.max_tokens,
+            temperature=params.temperature,
         )
-        text = response.get("response", "").strip()
-        eval_count = response.get("eval_count", 0)
-        total_ns = response.get("total_duration", 0)
         return json.dumps({
             "response": text,
-            "model": model,
-            "tokens": eval_count,
-            "duration_s": round(total_ns / 1e9, 1) if total_ns else 0,
+            "model": CLAUDE_MODEL,
         })
     except Exception as e:
         return _format_error(e, "shanebrain_ollama_generate")
