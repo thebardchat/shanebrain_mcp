@@ -888,7 +888,7 @@ def shanebrain_rag_list_classes(params: RagListClassesInput) -> str:
 class OllamaGenerateInput(BaseModel):
     model_config = ConfigDict(str_strip_whitespace=True, extra="forbid")
     prompt: str = Field(..., description="Prompt or question for the local model", min_length=1, max_length=8000)
-    model: str = Field(default="", description="Ollama model name (default: OLLAMA_MODEL env)")
+    model: str = Field(default="", description="Unused — inference is Claude Haiku")
     system_prompt: Optional[str] = Field(default=None, description="Optional system prompt", max_length=2000)
     temperature: float = Field(default=0.7, ge=0.0, le=2.0)
     max_tokens: int = Field(default=512, ge=1, le=4096)
