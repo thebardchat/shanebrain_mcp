@@ -603,40 +603,48 @@ def shanebrain_daily_note_search(params: DailyNoteSearchInput) -> str:
 
 @mcp.tool(
     name="shanebrain_daily_briefing",
-    annotations={"readOnlyHint": True, "destructiveHint": False, "idempotentHint": False, "openWorldHint": False},
+    annotations={"readOnlyHint": True, "destructiveHint": False, "idempotentHint": True, "openWorldHint": False},
+    meta={"ui": {"resourceUri": "ui://shanebrain/briefing"}},
 )
 def shanebrain_daily_briefing() -> str:
-    """AI-generated daily briefing summarizing recent notes via Ollama."""
+    """Personal daily briefing — sobriety, verse, book word count, cluster health, recent thoughts."""
     try:
-        with _weaviate() as h:
-            if not h.collection_exists("DailyNote"):
-                return json.dumps({"error": "DailyNote collection does not exist yet."})
+        today = date.today()
+        sober_days = (today - SOBER_SINCE).days
+        wedding_days = (WEDDING_DATE - today).days
+        dow = today.weekday()  # 0=Mon
+        verse_ref, verse_text = _VERSES[dow % 7]
 
-            notes = h._generic_fetch("DailyNote", limit=20)
-            if not notes:
-                return json.dumps({"briefing": "No daily notes found.", "note_count": 0})
+        # Book word count
+        book_words = 0
+        try:
+            book_words = len(BOOK2_PATH.read_text(encoding="utf-8", errors="ignore").split())
+        except OSError:
+            pass
 
-            note_texts = []
-            for n in notes:
-                ntype = n.get("note_type", "note")
-                content = n.get("content", "")
-                date = n.get("date", "")
-                note_texts.append(f"[{date} - {ntype}] {content}")
+        # Cluster health
+        cluster = _cluster_health()
 
-            client = _ollama_client()
-            response = client.chat(
-                model=OLLAMA_MODEL,
-                messages=[
-                    {"role": "system", "content": "You are ShaneBrain. Summarize these daily notes into a brief daily briefing. Be concise — bullet points preferred."},
-                    {"role": "user", "content": f"Here are recent notes:\n\n" + "\n".join(note_texts) + "\n\nGive me a daily briefing."},
-                ],
-                options={"temperature": 0.3, "num_predict": 100},
-                keep_alive="10m",
-            )
-            return json.dumps({
-                "briefing": response["message"]["content"],
-                "note_count": len(notes),
-            })
+        # Last 3 Thoughts
+        thoughts = []
+        try:
+            with _weaviate() as h:
+                _ensure_thoughts_collection(h)
+                thoughts = h._generic_fetch("Thoughts", limit=3)
+        except Exception:
+            pass
+
+        payload = {
+            "sober_days": sober_days,
+            "today": today.strftime("%A, %B %-d %Y"),
+            "verse_ref": verse_ref,
+            "verse_text": verse_text,
+            "book2_words": book_words,
+            "wedding_days": max(0, wedding_days),
+            "cluster": cluster,
+            "thoughts": thoughts,
+        }
+        return json.dumps(payload, default=str)
     except Exception as e:
         return _format_error(e, "shanebrain_daily_briefing")
 
