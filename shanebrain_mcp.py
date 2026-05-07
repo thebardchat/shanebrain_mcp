@@ -13,12 +13,14 @@ Transport: streamable-http on port 8100 (Docker), switchable to sse/stdio via --
 Quality:   Pydantic v2 validation, MCP annotations, actionable errors, stderr logging
 """
 
+import concurrent.futures
 import json
 import logging
 import os
+import socket
 import sys
 from contextlib import asynccontextmanager
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from enum import Enum
 from pathlib import Path
 from typing import List, Optional
