@@ -92,10 +92,22 @@ def _ollama_client():
     return ollama_lib.Client(host=OLLAMA_HOST, timeout=600)
 
 
+def _claude_generate(system: str, user: str, max_tokens: int = 256, temperature: float = 0.7) -> str:
+    """Generate text via Claude Haiku. Returns the response string."""
+    client = anthropic_lib.Anthropic(api_key=ANTHROPIC_API_KEY)
+    result = client.messages.create(
+        model=CLAUDE_MODEL,
+        max_tokens=max_tokens,
+        system=system,
+        messages=[{"role": "user", "content": user}],
+    )
+    return result.content[0].text.strip()
+
+
 def _check_node(hostname: str) -> tuple[str, str]:
     """TCP-ping a cluster node on port 22. Returns (hostname, status)."""
     try:
-        socket.create_connection((hostname, 22), timeout=1.0).close()
+        socket.create_connection((hostname, 22), timeout=2.0).close()
         return hostname, "green"
     except ConnectionRefusedError:
         return hostname, "green"  # host up, SSH just refused
