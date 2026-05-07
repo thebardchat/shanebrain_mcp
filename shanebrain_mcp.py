@@ -186,15 +186,7 @@ async def lifespan(app: FastMCP):
                 logger.warning("Weaviate: NOT ready")
     except Exception as e:
         logger.warning("Weaviate: NOT reachable (%s)", e)
-    # Check Ollama
-    try:
-        status = check_ollama()
-        if status.get("status") == "ok":
-            logger.info("Ollama: reachable (%d models)", len(status.get("models", [])))
-        else:
-            logger.warning("Ollama: NOT ready")
-    except Exception as e:
-        logger.warning("Ollama: NOT reachable (%s)", e)
+    logger.info("Inference: Claude Haiku (%s)", CLAUDE_MODEL)
     # Ensure planning dirs
     PLANNING_DIR.mkdir(parents=True, exist_ok=True)
     for sub in ("active-projects", "templates", "completed", "logs"):
