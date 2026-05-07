@@ -32,7 +32,7 @@ from starlette.requests import Request
 from starlette.responses import JSONResponse
 from weaviate.classes.query import Filter
 
-from health import check_gateway, check_ollama, check_weaviate
+from health import check_gateway, check_weaviate
 from weaviate_bridge import DockerWeaviateHelper
 
 # ---------------------------------------------------------------------------
@@ -48,8 +48,6 @@ logger = logging.getLogger("shanebrain_mcp")
 # ---------------------------------------------------------------------------
 # Config
 # ---------------------------------------------------------------------------
-OLLAMA_HOST = os.environ.get("OLLAMA_HOST", "http://localhost:11434")
-OLLAMA_MODEL = os.environ.get("OLLAMA_MODEL", "shanebrain-3b:latest")
 ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY", "")
 CLAUDE_MODEL = "claude-haiku-4-5-20251001"
 PLANNING_DIR = Path(os.environ.get("PLANNING_DIR", "/app/planning"))
