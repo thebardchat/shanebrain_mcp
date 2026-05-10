@@ -634,7 +634,7 @@ def shanebrain_daily_briefing() -> str:
             "verse_ref": verse_ref,
             "verse_text": verse_text,
             "book2_words": book_words,
-            "wedding_days": max(0, wedding_days),
+            "honeymoon_days": max(0, wedding_days),
             "cluster": cluster,
             "thoughts": thoughts,
         }
@@ -1715,7 +1715,7 @@ BRIEFING_HTML = """<!DOCTYPE html>
     var el=document.getElementById('content');
     el.style.display='flex';
     document.getElementById('loading').style.display='none';
-    var wdays=d.wedding_days>0?d.wedding_days+' days':'TODAY';
+    var wdays=(d.honeymoon_days||0)+' days in';
     var cluster='';
     if(d.cluster){Object.keys(d.cluster).forEach(function(n){
       var s=d.cluster[n];
