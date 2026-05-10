@@ -1735,7 +1735,7 @@ BRIEFING_HTML = """<!DOCTYPE html>
       '</div>'+
       '<hr class="divider"/>'+
       '<div class="row"><span class="label">Book II words</span><span class="value">'+d.book2_words.toLocaleString()+'</span></div>'+
-      '<div class="row"><span class="label">Gavin\'s wedding</span><span class="value">'+wdays+'</span></div>'+
+      '<div class="row"><span class="label">Gavin &amp; Angel Honeymoon</span><span class="value">'+wdays+'</span></div>'+
       '<hr class="divider"/>'+
       '<div class="label" style="margin-bottom:4px">Cluster</div>'+
       '<div class="cluster">'+cluster+'</div>'+
