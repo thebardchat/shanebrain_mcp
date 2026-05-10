@@ -56,9 +56,9 @@ RAG_CHUNK_LIMIT = 5
 
 # Daily briefing constants
 SOBER_SINCE = date(2023, 11, 27)
-WEDDING_DATE = date(2026, 5, 26)
+WEDDING_DATE = date(2026, 5, 2)
 BOOK2_PATH = Path(os.environ.get("BOOK2_PATH", "/app/book2/volume-two/compiled/draft-001.md"))
-CLUSTER_NODES = ["shanebrain", "ultra", "pulsar", "bullfrog", "mexico", "gulfshores", "neworleans"]
+CLUSTER_NODES = ["shanebrain", "alaska", "mexico", "bullfrog", "gulfshores", "neworleans", "pulsar00100"]
 _VERSES = [
     ("Psalm 27:11", "Teach me your way, O Lord; lead me in a straight path."),
     ("Proverbs 3:5-6", "Trust in the Lord with all your heart and lean not on your own understanding."),
@@ -605,7 +605,7 @@ def shanebrain_daily_briefing() -> str:
     try:
         today = date.today()
         sober_days = (today - SOBER_SINCE).days
-        wedding_days = (WEDDING_DATE - today).days
+        wedding_days = (today - WEDDING_DATE).days  # days since wedding (honeymoon counter)
         dow = today.weekday()  # 0=Mon
         verse_ref, verse_text = _VERSES[dow % 7]
 
