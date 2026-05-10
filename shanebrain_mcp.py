@@ -1549,32 +1549,15 @@ def shanebrain_context_snapshot() -> str:
                 for p in projects
             ]
 
-            # --- Shane profile from PersonalDoc (if it exists) ---
-            # Exclude credentials category — those contain ENV_SECRET: lines and must never
-            # appear in context snapshots sent to external sessions.
-            try:
-                from weaviate.classes.query import Filter
-                _prof_filter = Filter.by_property("category").not_equal("credentials")
-            except Exception:
-                _prof_filter = None
-            profile_docs = h._generic_near_text(
-                "PersonalDoc", "shane profile who is shane mission values",
-                filters=_prof_filter, limit=3
+            # --- Shane profile (hardcoded — near_text search over PersonalDoc is unsafe
+            # because credential docs match semantically and must never leak into snapshots) ---
+            snapshot["shane_profile"] = (
+                "Shane Brazelton — SRM Concrete dispatcher, Hazel Green AL. "
+                "Faith, family, sobriety (since Nov 27 2023), local AI. "
+                "Building for the ~800M people Big Tech is about to leave behind. "
+                "Wife Tiffany (home recovering — Chiari malformation + shunts). "
+                "Sons: Gavin (m. Angel), Kai, Pierce, Jaxton, Ryker (5)."
             )
-            # Belt-and-suspenders: skip any doc whose content looks like a secret
-            safe_profile = next(
-                (d for d in profile_docs if not d.get("content", "").startswith("ENV_SECRET:")),
-                None,
-            )
-            if safe_profile:
-                snapshot["shane_profile"] = safe_profile.get("content", "")[:500]
-            else:
-                snapshot["shane_profile"] = (
-                    "Shane Brazelton — SRM Concrete dispatcher, Hazel Green AL. "
-                    "Faith, family, sobriety, local AI. Building for the ~800M people "
-                    "Big Tech is about to leave behind. Wife Tiffany (Chiari malformation, shunts needed). "
-                    "Sons: Gavin (m. Angel), Kai, Pierce, Jaxton, Ryker (5)."
-                )
 
             # --- Family state from recent notes ---
             family_notes = h.search_conversations("Tiffany family health surgery kids", limit=2)
