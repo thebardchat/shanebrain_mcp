@@ -1550,11 +1550,24 @@ def shanebrain_context_snapshot() -> str:
             ]
 
             # --- Shane profile from PersonalDoc (if it exists) ---
+            # Exclude credentials category — those contain ENV_SECRET: lines and must never
+            # appear in context snapshots sent to external sessions.
+            try:
+                from weaviate.classes.query import Filter
+                _prof_filter = Filter.by_property("category").not_equal("credentials")
+            except Exception:
+                _prof_filter = None
             profile_docs = h._generic_near_text(
-                "PersonalDoc", "shane profile who is shane mission values", limit=1
+                "PersonalDoc", "shane profile who is shane mission values",
+                filters=_prof_filter, limit=3
             )
-            if profile_docs:
-                snapshot["shane_profile"] = profile_docs[0].get("content", "")[:500]
+            # Belt-and-suspenders: skip any doc whose content looks like a secret
+            safe_profile = next(
+                (d for d in profile_docs if not d.get("content", "").startswith("ENV_SECRET:")),
+                None,
+            )
+            if safe_profile:
+                snapshot["shane_profile"] = safe_profile.get("content", "")[:500]
             else:
                 snapshot["shane_profile"] = (
                     "Shane Brazelton — SRM Concrete dispatcher, Hazel Green AL. "
