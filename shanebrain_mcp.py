@@ -2,7 +2,7 @@
 """
 ShaneBrain MCP Server v2.5
 ===========================
-37 tools across 16 groups — merged from Pi deployment + GitHub quality patterns.
+39 tools across 17 groups — merged from Pi deployment + GitHub quality patterns.
 
 Groups: Knowledge (2), Chat (3), RAG Chat (1), Social (2), Vault (3),
         Notes (3), Drafts (2), Security (3), Weaviate Admin (2),
@@ -1781,6 +1781,49 @@ BRIEFING_HTML = """<!DOCTYPE html>
 def briefing_ui() -> str:
     """MCP App UI resource for the daily briefing."""
     return BRIEFING_HTML
+
+
+# ===========================================================================
+# GROUP 17: Pulsar Sentinel — 2 tools
+# ===========================================================================
+
+SENTINEL_BASE = os.environ.get("SENTINEL_URL", "http://localhost:8250")
+SENTINEL_SERVICE_KEY = os.environ.get("PULSAR_SERVICE_KEY", "shanebrain-internal-2026")
+
+
+@mcp.tool(
+    name="shanebrain_sentinel_health",
+    annotations={"readOnlyHint": True, "destructiveHint": False, "idempotentHint": True, "openWorldHint": False},
+)
+def shanebrain_sentinel_health() -> str:
+    """Check Pulsar Sentinel is alive. No auth required. Use for uptime monitoring.
+    Returns: status (healthy/down), pqc_available (bool — real ML-KEM loaded), timestamp."""
+    try:
+        resp = requests.get(f"{SENTINEL_BASE}/api/v1/health", timeout=5)
+        resp.raise_for_status()
+        return json.dumps(resp.json(), default=str)
+    except requests.exceptions.ConnectionError:
+        return json.dumps({"status": "down", "error": "connection refused — is pulsar-sentinel service running?"})
+    except Exception as e:
+        return _format_error(e, "shanebrain_sentinel_health")
+
+
+@mcp.tool(
+    name="shanebrain_sentinel_status",
+    annotations={"readOnlyHint": True, "destructiveHint": False, "idempotentHint": True, "openWorldHint": False},
+)
+def shanebrain_sentinel_status() -> str:
+    """Full Pulsar Sentinel status: pqc_available, user role, tier, trust score (PTS).
+    Uses internal service key — no MetaMask needed. Flag pqc_available=false in daily briefing."""
+    try:
+        headers = {"Authorization": f"Bearer {SENTINEL_SERVICE_KEY}"}
+        resp = requests.get(f"{SENTINEL_BASE}/api/v1/status", headers=headers, timeout=5)
+        resp.raise_for_status()
+        return json.dumps(resp.json(), default=str)
+    except requests.exceptions.ConnectionError:
+        return json.dumps({"status": "down", "error": "connection refused — is pulsar-sentinel service running?"})
+    except Exception as e:
+        return _format_error(e, "shanebrain_sentinel_status")
 
 
 # ===========================================================================
