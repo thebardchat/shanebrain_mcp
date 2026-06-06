@@ -1,13 +1,13 @@
 #!/usr/bin/env python3
 """
-ShaneBrain MCP Server v2.5
+ShaneBrain MCP Server v2.6
 ===========================
-39 tools across 17 groups — merged from Pi deployment + GitHub quality patterns.
+42 tools across 18 groups — merged from Pi deployment + GitHub quality patterns.
 
 Groups: Knowledge (2), Chat (3), RAG Chat (1), Social (2), Vault (3),
         Notes (3), Drafts (2), Security (3), Weaviate Admin (2),
         Ollama (2), Planning (3), System (1), Email (2), Calendar (5),
-        Weaviate Session (2)
+        Weaviate Session (2), Node Bus (3)
 
 Transport: streamable-http on port 8100 (Docker), switchable to sse/stdio via --transport
 Quality:   Pydantic v2 validation, MCP annotations, actionable errors, stderr logging
@@ -1950,6 +1950,6 @@ if __name__ == "__main__":
     parser.add_argument("--transport", choices=["sse", "streamable-http", "stdio"], default="streamable-http")
     args = parser.parse_args()
 
-    logger.info("Starting ShaneBrain MCP v2.5 | transport=%s | port=%s | 37 tools", args.transport, MCP_PORT)
+    logger.info("Starting ShaneBrain MCP v2.6 | transport=%s | port=%s | 42 tools", args.transport, MCP_PORT)
 
     mcp.run(transport=args.transport)
