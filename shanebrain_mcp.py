@@ -1849,6 +1849,93 @@ def shanebrain_sentinel_status() -> str:
 
 
 # ===========================================================================
+# Node Bus — cross-session, cross-node messaging via shared SQLite
+# ===========================================================================
+
+class NodePostInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    from_node: str = Field(..., description="Sender node name (e.g. 'shanebrain', 'biloxi')")
+    content: str = Field(..., description="Message content")
+    to_node: str = Field("all", description="Recipient node name or 'all'")
+    tags: Optional[str] = Field(None, description="Optional comma-separated tags")
+
+
+class NodeReadInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    to_node: Optional[str] = Field(None, description="Filter by recipient ('all' or specific node). Omit to read everything.")
+    limit: int = Field(30, ge=1, le=100, description="Max messages to return (newest first)")
+    since_id: Optional[int] = Field(None, description="Only return messages with id > since_id")
+
+
+@mcp.tool(
+    description="Post a message to the cross-node session bus. Any Claude Code session on any cluster node can read it.",
+    annotations={"readOnlyHint": False, "idempotentHint": False},
+)
+def shanebrain_node_post(params: NodePostInput) -> str:
+    try:
+        conn = _bus_conn()
+        ts = datetime.now(timezone.utc).isoformat()
+        cur = conn.execute(
+            "INSERT INTO messages (from_node, to_node, content, tags, ts) VALUES (?,?,?,?,?)",
+            (params.from_node, params.to_node, params.content, params.tags, ts),
+        )
+        conn.commit()
+        msg_id = cur.lastrowid
+        conn.close()
+        return json.dumps({"ok": True, "id": msg_id, "ts": ts})
+    except Exception as e:
+        return _format_error(e, "shanebrain_node_post")
+
+
+@mcp.tool(
+    description="Read messages from the cross-node session bus. Filter by recipient or read all.",
+    annotations={"readOnlyHint": True},
+)
+def shanebrain_node_read(params: NodeReadInput) -> str:
+    try:
+        conn = _bus_conn()
+        clauses, args = [], []
+        if params.to_node:
+            clauses.append("(to_node = ? OR to_node = 'all')")
+            args.append(params.to_node)
+        if params.since_id is not None:
+            clauses.append("id > ?")
+            args.append(params.since_id)
+        where = ("WHERE " + " AND ".join(clauses)) if clauses else ""
+        args.append(params.limit)
+        rows = conn.execute(
+            f"SELECT id, from_node, to_node, content, tags, ts FROM messages {where} ORDER BY id DESC LIMIT ?",
+            args,
+        ).fetchall()
+        conn.close()
+        messages = [
+            {"id": r[0], "from": r[1], "to": r[2], "content": r[3], "tags": r[4], "ts": r[5]}
+            for r in rows
+        ]
+        return json.dumps({"messages": messages, "count": len(messages)}, default=str)
+    except Exception as e:
+        return _format_error(e, "shanebrain_node_read")
+
+
+@mcp.tool(
+    description="Show which cluster nodes have posted to the session bus and when — live heartbeat view.",
+    annotations={"readOnlyHint": True},
+)
+def shanebrain_node_status() -> str:
+    try:
+        conn = _bus_conn()
+        rows = conn.execute(
+            "SELECT from_node, MAX(ts) as last_seen, COUNT(*) as posts FROM messages GROUP BY from_node ORDER BY last_seen DESC"
+        ).fetchall()
+        total = conn.execute("SELECT COUNT(*) FROM messages").fetchone()[0]
+        conn.close()
+        nodes = [{"node": r[0], "last_seen": r[1], "posts": r[2]} for r in rows]
+        return json.dumps({"active_nodes": nodes, "total_messages": total}, default=str)
+    except Exception as e:
+        return _format_error(e, "shanebrain_node_status")
+
+
+# ===========================================================================
 # Entry point
 # ===========================================================================
 
