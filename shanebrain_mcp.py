@@ -54,6 +54,10 @@ CLAUDE_MODEL = "claude-haiku-4-5-20251001"
 PLANNING_DIR = Path(os.environ.get("PLANNING_DIR", "/app/planning"))
 MCP_PORT = int(os.environ.get("MCP_PORT", "8100"))
 RAG_CHUNK_LIMIT = 5
+NODE_BUS_WEBHOOK = os.environ.get(
+    "NODE_BUS_WEBHOOK",
+    "https://discord.com/api/webhooks/1512754438429741118/5c7fGicvxD1yvbY-j00Gq8ZMzdJcXY9QNsQYiUR4YS8W1wNZH1unW4JxIPEhYjnxyaYw",
+)
 
 # Daily briefing constants
 SOBER_SINCE = date(2023, 11, 27)
