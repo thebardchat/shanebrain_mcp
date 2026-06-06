@@ -1897,7 +1897,10 @@ def shanebrain_node_post(params: NodePostInput) -> str:
             req = urllib.request.Request(
                 NODE_BUS_WEBHOOK,
                 data=discord_body,
-                headers={"Content-Type": "application/json"},
+                headers={
+                    "Content-Type": "application/json",
+                    "User-Agent": "DiscordBot (https://shanebrain.local, 1.0)",
+                },
                 method="POST",
             )
             urllib.request.urlopen(req, timeout=3)
