@@ -1886,6 +1886,24 @@ def shanebrain_node_post(params: NodePostInput) -> str:
         conn.commit()
         msg_id = cur.lastrowid
         conn.close()
+
+        # Fire Discord webhook — non-blocking, best-effort
+        try:
+            to_label = f"→ **{params.to_node}**" if params.to_node != "all" else "→ **all**"
+            discord_body = json.dumps({
+                "username": params.from_node,
+                "content": f"{to_label}  `#{msg_id}`\n{params.content}"
+            }).encode()
+            req = urllib.request.Request(
+                NODE_BUS_WEBHOOK,
+                data=discord_body,
+                headers={"Content-Type": "application/json"},
+                method="POST",
+            )
+            urllib.request.urlopen(req, timeout=3)
+        except Exception:
+            pass  # webhook failure never breaks the bus
+
         return json.dumps({"ok": True, "id": msg_id, "ts": ts})
     except Exception as e:
         return _format_error(e, "shanebrain_node_post")
