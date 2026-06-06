@@ -100,12 +100,13 @@ def _claude_generate(system: str, user: str, max_tokens: int = 256, temperature:
 
 
 def _check_node(hostname: str) -> tuple[str, str]:
-    """TCP-ping a cluster node on port 22. Returns (hostname, status)."""
+    """TCP-ping a cluster node. Returns (hostname, status)."""
+    port = CLUSTER_NODE_PORTS.get(hostname, 22)
     try:
-        socket.create_connection((hostname, 22), timeout=2.0).close()
+        socket.create_connection((hostname, port), timeout=2.0).close()
         return hostname, "green"
     except ConnectionRefusedError:
-        return hostname, "green"  # host up, SSH just refused
+        return hostname, "green"  # host up, service just refused
     except OSError:
         return hostname, "red"
 
@@ -114,6 +115,24 @@ def _cluster_health() -> dict[str, str]:
     with concurrent.futures.ThreadPoolExecutor(max_workers=8) as pool:
         results = pool.map(_check_node, CLUSTER_NODES)
     return dict(results)
+
+
+def _bus_conn() -> sqlite3.Connection:
+    """Open (and initialize) the node-bus SQLite database."""
+    NODE_BUS_PATH.parent.mkdir(parents=True, exist_ok=True)
+    conn = sqlite3.connect(str(NODE_BUS_PATH), check_same_thread=False)
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS messages (
+            id        INTEGER PRIMARY KEY AUTOINCREMENT,
+            from_node TEXT NOT NULL,
+            to_node   TEXT NOT NULL DEFAULT 'all',
+            content   TEXT NOT NULL,
+            tags      TEXT,
+            ts        TEXT NOT NULL
+        )
+    """)
+    conn.commit()
+    return conn
 
 
 def _ensure_thoughts_collection(h) -> None:
