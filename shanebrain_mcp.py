@@ -18,6 +18,7 @@ import json
 import logging
 import os
 import socket
+import sqlite3
 import sys
 from contextlib import asynccontextmanager
 from datetime import date, datetime, timezone
@@ -58,7 +59,9 @@ RAG_CHUNK_LIMIT = 5
 SOBER_SINCE = date(2023, 11, 27)
 WEDDING_DATE = date(2026, 5, 2)
 BOOK2_PATH = Path(os.environ.get("BOOK2_PATH", "/app/book2/volume-two/compiled/draft-001.md"))
-CLUSTER_NODES = ["shanebrain", "alaska", "mexico", "bullfrog", "gulfshores", "neworleans", "pulsar00100"]
+CLUSTER_NODES = ["shanebrain", "alaska", "mexico", "bullfrog", "gulfshores", "neworleans", "pulsar00100", "biloxi"]
+CLUSTER_NODE_PORTS = {"biloxi": 8080}  # nodes without SSH use a different health-check port
+NODE_BUS_PATH = Path(os.environ.get("NODE_BUS_PATH", "/app/node-bus/bus.db"))
 _VERSES = [
     ("Psalm 27:11", "Teach me your way, O Lord; lead me in a straight path."),
     ("Proverbs 3:5-6", "Trust in the Lord with all your heart and lean not on your own understanding."),
@@ -176,7 +179,7 @@ Be direct. Be brief. Be accurate."""
 
 @asynccontextmanager
 async def lifespan(app: FastMCP):
-    logger.info("ShaneBrain MCP v2.5 starting — 37 tools, 16 groups")
+    logger.info("ShaneBrain MCP v2.5 starting — 39 tools, 17 groups")
     # Check Weaviate
     try:
         with _weaviate() as h:
