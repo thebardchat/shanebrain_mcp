@@ -1672,8 +1672,8 @@ def weaviate_get_context() -> str:
                 for obj in response.objects:
                     props = obj.properties
                     ts = props.get("timestamp", "")
-                    source = props.get("source", "unknown")
-                    summary = props.get("summary", (props.get("message") or "")[:200])
+                    source = props.get("source") or props.get("mode") or props.get("role") or "unknown"
+                    summary = props.get("summary") or (props.get("message") or "")[:300]
                     lines.append(f"[{ts}] [{source}]\n{summary}\n\n")
 
         # Append context snapshot if available
