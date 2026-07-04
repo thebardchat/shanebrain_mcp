@@ -29,6 +29,7 @@ from typing import List, Optional
 import anthropic as anthropic_lib
 from mcp.server.fastmcp import FastMCP
 from pydantic import BaseModel, ConfigDict, Field, field_validator
+import requests
 from starlette.requests import Request
 from starlette.responses import JSONResponse
 from weaviate.classes.query import Filter
