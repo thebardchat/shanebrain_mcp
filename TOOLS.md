@@ -1,7 +1,7 @@
 # ShaneBrain MCP Tools Reference
 
 **Version:** v2.6
-**Tool count:** 32 tools across 14 groups
+**Tool count:** 43 tools across 18 groups
 **Transport:** Streamable HTTP on port 8100
 **Endpoints:** `/mcp` (MCP JSON-RPC), `/health` (HTTP status)
 
@@ -46,7 +46,7 @@ Add an entry to ShaneBrain's legacy knowledge base (LegacyKnowledge). Stored con
 
 ---
 
-## Group 2: Chat (3 tools)
+## Group 2: Chat (4 tools)
 
 ### `shanebrain_search_conversations`
 
@@ -90,6 +90,22 @@ Get conversation history for a session by ID.
 | `limit` | integer | no | 50 | Max messages (1–200) |
 
 **Returns:** JSON with `messages` array and `count`.
+
+---
+
+### `shanebrain_chat`
+
+Full RAG chat — searches `LegacyKnowledge` semantically, injects matching context into the system prompt, then generates a response via Claude Haiku. 100% local retrieval, cloud inference for generation. Uses the ShaneBrain persona with family knowledge baked in.
+
+**Parameters:**
+| Name | Type | Required | Default | Description |
+|------|------|----------|---------|-------------|
+| `message` | string | yes | — | Your message to ShaneBrain (1–2000 chars) |
+| `model` | string | no | `""` | Unused — inference is always Claude Haiku |
+| `temperature` | float | no | 0.3 | 0.0–2.0 |
+| `max_tokens` | integer | no | 100 | 1–4096 |
+
+**Returns:** JSON with `response`, `knowledge_chunks_used`, and `model`.
 
 ---
 
@@ -168,7 +184,7 @@ List document counts per category in the PersonalDoc vault.
 
 ---
 
-## Group 5: Notes (2 tools)
+## Group 5: Notes (3 tools)
 
 ### `shanebrain_daily_note_add`
 
@@ -200,7 +216,32 @@ Search daily notes semantically.
 
 ---
 
-## Group 6: Drafts (1 tool)
+### `shanebrain_daily_briefing`
+
+Personal daily briefing — sobriety day count, honeymoon day count, a rotating verse, `book2` word count, cluster health (TCP ping across `CLUSTER_NODES`), and the 3 most recent `Thoughts` entries.
+
+**Parameters:** None
+
+**Returns:** JSON with `sober_days`, `today`, `verse_ref`, `verse_text`, `book2_words`, `honeymoon_days`, `cluster`, `thoughts`.
+
+---
+
+## Group 6: Drafts (2 tools)
+
+### `shanebrain_draft_create`
+
+Generate a writing draft via Claude Haiku, optionally grounded in `PersonalDoc` vault context. Saves the result to `PersonalDraft`.
+
+**Parameters:**
+| Name | Type | Required | Default | Description |
+|------|------|----------|---------|-------------|
+| `prompt` | string | yes | — | What to write about (1–2000 chars) |
+| `draft_type` | string | no | `general` | email, message, post, letter, general |
+| `use_vault_context` | boolean | no | `true` | Search `PersonalDoc` for context before generating |
+
+**Returns:** JSON with `draft`, `draft_type`, `saved`, `uuid`, `vault_context_used`.
+
+---
 
 ### `shanebrain_draft_search`
 
@@ -511,7 +552,106 @@ Return recent session context formatted for CLAUDE.md injection. Fetches the 5 m
 
 ---
 
-## Group 15: Network (1 tool)
+## Group 15: Ollama Local Inference (2 tools)
+
+### `shanebrain_ollama_generate`
+
+Generate text via Claude Haiku (Ollama itself was decommissioned 2026-04-30 — name kept for client compatibility). For RAG-grounded answers use `shanebrain_chat` instead; this tool generates without knowledge-base context.
+
+**Parameters:**
+| Name | Type | Required | Default | Description |
+|------|------|----------|---------|-------------|
+| `prompt` | string | yes | — | Prompt or question (1–8000 chars) |
+| `model` | string | no | `""` | Unused — inference is always Claude Haiku |
+| `system_prompt` | string | no | null | Optional system prompt (max 2000 chars) |
+| `temperature` | float | no | 0.7 | 0.0–2.0 |
+| `max_tokens` | integer | no | 512 | 1–4096 |
+
+**Returns:** JSON with `response` and `model`.
+
+---
+
+### `shanebrain_ollama_list_models`
+
+Returns a fixed status message — Ollama was decommissioned 2026-04-30 and all inference now routes through Claude Haiku. No local models running.
+
+**Parameters:**
+| Name | Type | Required | Default | Description |
+|------|------|----------|---------|-------------|
+| `response_format` | string | no | `markdown` | `json` or `markdown` — accepted but unused |
+
+**Returns:** Plain text status message.
+
+---
+
+## Group 16: Pulsar Sentinel (2 tools)
+
+### `shanebrain_sentinel_health`
+
+Check Pulsar Sentinel is alive. No auth required — use for uptime monitoring.
+
+**Parameters:** None
+
+**Returns:** JSON from Pulsar Sentinel's `/api/v1/health` — `status` (healthy/down), `pqc_available` (bool — real ML-KEM loaded), `timestamp`. If unreachable: `{"status": "down", "error": "..."}`.
+
+---
+
+### `shanebrain_sentinel_status`
+
+Full Pulsar Sentinel status — `pqc_available`, user role, tier, trust score (PTS). Authenticates via an internal service key, no MetaMask needed.
+
+**Parameters:** None
+
+**Returns:** JSON from Pulsar Sentinel's `/api/v1/status`. Flag `pqc_available: false` in the daily briefing if seen. If unreachable: `{"status": "down", "error": "..."}`.
+
+---
+
+## Group 17: Node Bus (3 tools)
+
+Cross-session, cross-node messaging via a shared SQLite database (`NODE_BUS_PATH`, default `/app/node-bus/bus.db`). Any Claude Code session on any cluster node can post and read.
+
+### `shanebrain_node_post`
+
+Post a message to the cross-node session bus. Also fires a best-effort Discord webhook notification (failures never break the post).
+
+**Parameters:**
+| Name | Type | Required | Default | Description |
+|------|------|----------|---------|-------------|
+| `from_node` | string | yes | — | Sender node name (e.g. `shanebrain`, `biloxi`) |
+| `content` | string | yes | — | Message content |
+| `to_node` | string | no | `all` | Recipient node name or `all` |
+| `tags` | string | no | null | Optional comma-separated tags |
+
+**Returns:** JSON with `ok`, `id`, `ts`.
+
+---
+
+### `shanebrain_node_read`
+
+Read messages from the cross-node session bus.
+
+**Parameters:**
+| Name | Type | Required | Default | Description |
+|------|------|----------|---------|-------------|
+| `to_node` | string | no | null | Filter by recipient (`all` or a specific node); omit for everything |
+| `limit` | integer | no | 30 | Max messages, newest first (1–100) |
+| `since_id` | integer | no | null | Only return messages with `id` greater than this |
+
+**Returns:** JSON with `messages` array and `count`.
+
+---
+
+### `shanebrain_node_status`
+
+Live heartbeat view — which cluster nodes have posted to the session bus and when.
+
+**Parameters:** None
+
+**Returns:** JSON with `active_nodes` (per-node last-seen + post count) and `total_messages`.
+
+---
+
+## Group 18: Network (1 tool)
 
 ### `shanebrain_network_scan`
 
