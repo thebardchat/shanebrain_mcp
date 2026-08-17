@@ -2,6 +2,10 @@ FROM python:3.13-slim
 
 WORKDIR /app
 
+# arp-scan — powers shanebrain_network_scan (LAN recon tool)
+RUN apt-get update && apt-get install -y --no-install-recommends arp-scan \
+ && rm -rf /var/lib/apt/lists/*
+
 # Install dependencies first (layer caching)
 COPY mcp-server/requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt

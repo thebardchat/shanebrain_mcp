@@ -511,6 +511,28 @@ Return recent session context formatted for CLAUDE.md injection. Fetches the 5 m
 
 ---
 
+## Group 15: Network (1 tool)
+
+### `shanebrain_network_scan`
+
+ARP-scan the home LAN from the Pi. Private subnets only, capped at `/22` (1024 addresses). Requires the container to run with `NET_RAW`/`NET_ADMIN` and see the LAN NIC directly (`network_mode: host` — see `docker-compose.yml`), since ARP is layer 2 and MAC-vendor lookup is the point of the tool.
+
+**Parameters:**
+| Name | Type | Required | Default | Description |
+|------|------|----------|---------|-------------|
+| `subnet` | string | no | `192.168.1.0/24` | Private CIDR to scan, `/22` or smaller |
+| `vendor_filter` | string | no | `""` | Case-insensitive substring match on ARP vendor string, e.g. `canon`. Empty = all devices. |
+| `iface` | string | no | `eth0` | LAN interface to scan from (e.g. `eth0`, `end0`) |
+
+**Returns:** JSON with `subnet`, `iface`, `filter`, `count`, `devices` (list of `{ip, mac, vendor}`), and `scanned_at`. On failure, `{"error": ...}`.
+
+**Notes:**
+- Runs `arp-scan` as a validated argument list (no shell) — no command-injection surface.
+- Best-effort audit trail: writes a `low`-severity entry to `SecurityLog` after each scan; a logging failure never blocks the scan result.
+- This is LAN reconnaissance — if the MCP endpoint is ever exposed outside the LAN (e.g. via a Cloudflare tunnel), put access control in front of it first.
+
+---
+
 ## Notes
 
 - All tools use Pydantic v2 validation with Field constraints
@@ -520,6 +542,7 @@ Return recent session context formatted for CLAUDE.md injection. Fetches the 5 m
 - Embeddings are produced by Weaviate's `text2vec-transformers` vectorizer; no inference dependency
 - Email tools require `GMAIL_APP_PASSWORD` env var — never hardcoded
 - Calendar tools require `gcal_token.json` at `GCAL_TOKEN_PATH` — run `scripts/google_calendar_setup.py` once to authenticate
+- Network tools require `arp-scan` installed in the container image and `NET_RAW`/`NET_ADMIN` capabilities
 
 ---
 
