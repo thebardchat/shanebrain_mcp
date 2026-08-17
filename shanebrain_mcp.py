@@ -2,23 +2,26 @@
 """
 ShaneBrain MCP Server v2.6
 ===========================
-42 tools across 18 groups — merged from Pi deployment + GitHub quality patterns.
+43 tools across 18 groups — merged from Pi deployment + GitHub quality patterns.
 
 Groups: Knowledge (2), Chat (3), RAG Chat (1), Social (2), Vault (3),
         Notes (3), Drafts (2), Security (3), Weaviate Admin (2),
         Ollama (2), Planning (3), System (1), Email (2), Calendar (5),
-        Weaviate Session (2), Node Bus (3)
+        Weaviate Session (2), Network (1), Node Bus (3)
 
 Transport: streamable-http on port 8100 (Docker), switchable to sse/stdio via --transport
 Quality:   Pydantic v2 validation, MCP annotations, actionable errors, stderr logging
 """
 
 import concurrent.futures
+import ipaddress
 import json
 import logging
 import os
+import re
 import socket
 import sqlite3
+import subprocess
 import sys
 from contextlib import asynccontextmanager
 from datetime import date, datetime, timezone
@@ -1854,6 +1857,83 @@ def shanebrain_sentinel_status() -> str:
 
 
 # ===========================================================================
+# GROUP 18: Network — 1 tool
+# ===========================================================================
+
+class NetworkScanInput(BaseModel):
+    model_config = ConfigDict(str_strip_whitespace=True, extra="forbid")
+    subnet: str = Field(default="192.168.1.0/24", description="Private CIDR to scan, /22 or smaller")
+    vendor_filter: str = Field(default="", description="Case-insensitive substring match on ARP vendor string, e.g. 'canon'. Empty = all devices.")
+    iface: str = Field(default="eth0", description="LAN interface to scan from (e.g. 'eth0', 'end0')")
+
+    @field_validator("iface")
+    @classmethod
+    def valid_iface(cls, v: str) -> str:
+        if not re.fullmatch(r"[a-z0-9]{2,15}", v):
+            raise ValueError("bad interface name")
+        return v
+
+
+@mcp.tool(
+    name="shanebrain_network_scan",
+    annotations={"readOnlyHint": True, "destructiveHint": False, "idempotentHint": True, "openWorldHint": True},
+)
+def shanebrain_network_scan(params: NetworkScanInput) -> str:
+    """ARP-scan the home LAN from the Pi. Private subnets only, capped at /22
+    (1024 addresses). Requires the container to have NET_RAW/NET_ADMIN and see
+    the LAN NIC (host network mode) — see docker-compose.yml."""
+    try:
+        net = ipaddress.ip_network(params.subnet, strict=False)
+        if not net.is_private or net.num_addresses > 1024:
+            raise ValueError
+    except ValueError:
+        return json.dumps({"error": "private subnet only, /22 or smaller"})
+
+    try:
+        proc = subprocess.run(
+            ["arp-scan", f"--interface={params.iface}", "--retry=2", str(net)],
+            capture_output=True, text=True, timeout=45,
+        )
+    except subprocess.TimeoutExpired:
+        return json.dumps({"error": "scan timed out (45s)"})
+    except FileNotFoundError:
+        return json.dumps({"error": "arp-scan not installed in container"})
+
+    hits = {}
+    for line in proc.stdout.splitlines():
+        m = re.match(r"^(\d{1,3}(?:\.\d{1,3}){3})\s+([0-9A-Fa-f:]{17})\s+(.+)$", line)
+        if m and params.vendor_filter.lower() in m.group(3).lower():
+            hits[m.group(1)] = {"ip": m.group(1), "mac": m.group(2), "vendor": m.group(3).strip()}
+
+    if not hits and proc.returncode != 0:
+        return json.dumps({"error": (proc.stderr or proc.stdout).strip()[:300]})
+
+    result = {
+        "subnet": str(net),
+        "iface": params.iface,
+        "filter": params.vendor_filter or None,
+        "count": len(hits),
+        "devices": list(hits.values()),
+        "scanned_at": datetime.now(timezone.utc).isoformat(),
+    }
+
+    # Best-effort audit trail — a logging hiccup should never hide scan results.
+    try:
+        with _weaviate() as h:
+            h._generic_insert("SecurityLog", {
+                "event": "lan_network_scan",
+                "severity": "low",
+                "details": f"ARP scan of {result['subnet']} via {params.iface}: {result['count']} device(s)"
+                            + (f" matching '{params.vendor_filter}'" if params.vendor_filter else ""),
+                "timestamp": result["scanned_at"],
+            })
+    except Exception:
+        pass
+
+    return json.dumps(result, default=str)
+
+
+# ===========================================================================
 # Node Bus — cross-session, cross-node messaging via shared SQLite
 # ===========================================================================
 
@@ -1976,6 +2056,6 @@ if __name__ == "__main__":
     parser.add_argument("--transport", choices=["sse", "streamable-http", "stdio"], default="streamable-http")
     args = parser.parse_args()
 
-    logger.info("Starting ShaneBrain MCP v2.6 | transport=%s | port=%s | 42 tools", args.transport, MCP_PORT)
+    logger.info("Starting ShaneBrain MCP v2.6 | transport=%s | port=%s | 43 tools", args.transport, MCP_PORT)
 
     mcp.run(transport=args.transport)
