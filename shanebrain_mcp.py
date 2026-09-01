@@ -1961,6 +1961,170 @@ def shanebrain_node_status() -> str:
         return _format_error(e, "shanebrain_node_status")
 
 
+
+
+# ===========================================================================
+# GROUP 18: Equipment Scout (Heavy Iron Year One) — 1 tool
+# ===========================================================================
+
+class EquipmentScoutInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    mission_type: str = Field(
+        ...,
+        description="One of: 'fema', 'training', 'leasing', 'owner-op', 'tech'",
+    )
+    live_scan: bool = Field(
+        default=True,
+        description="If true, also pull live IronPlanet listings via the gulfshores equipment-scout service",
+    )
+    make_filter: Optional[str] = Field(
+        default=None,
+        description="Comma-separated makes to filter live results, e.g. 'cat,komatsu'. Defaults to mission-appropriate makes.",
+    )
+
+    @field_validator("mission_type")
+    @classmethod
+    def valid_mission(cls, v: str) -> str:
+        allowed = {"fema", "training", "leasing", "owner-op", "tech"}
+        if v.lower() not in allowed:
+            raise ValueError(f"mission_type must be one of {sorted(allowed)}")
+        return v.lower()
+
+
+_EQUIPMENT_BENCHMARKS = {
+    "Cat 320 Excavator": {"gsaxcess": "$25K-$45K", "market": "$85K-$120K", "day366_sale": "$75K-$105K"},
+    "Dozer (Cat D6)": {"gsaxcess": "$20K-$40K", "market": "$70K-$100K", "day366_sale": "$60K-$90K"},
+    "Compact Track Loader": {"gsaxcess": "$8K-$18K", "market": "$35K-$55K", "day366_sale": "$30K-$50K"},
+    "Generator (STEP)": {"gsaxcess": "$2K-$8K", "market": "$15K-$30K", "day366_sale": "$12K-$25K"},
+    "Dell R740xd Server": {"gsaxcess": "$400-$2,500 (GovDeals, NOT GSAxcess)", "market": "$15K-$22K new", "day366_sale": "-"},
+}
+
+_MISSION_PRIORITY = {
+    "fema": ["Excavator with thumb (Day 1)", "Dozer (Day 1)", "Compact Track Loader (Day 2)", "Generator via GSAxcess STEP program"],
+    "training": ["Cat 320-class Excavator (most versatile training unit)", "Compact Track Loader"],
+    "leasing": ["Cat 320 Excavator (best resale/leasing demand)", "Dozer (Cat D6)"],
+    "owner-op": ["Cat 320-class Excavator (flywheel default target)"],
+    "tech": ["Dell PowerEdge R740xd", "HP DL380 Gen10", "NVIDIA A10 24GB (source commercially, not GSAxcess/GovDeals)"],
+}
+
+_MISSION_MAKE_DEFAULTS = {
+    "fema": "cat,komatsu,john deere",
+    "training": "cat,komatsu",
+    "leasing": "cat,komatsu,volvo",
+    "owner-op": "cat,komatsu",
+    "tech": "",
+}
+
+_INSPECTION_CHECKLIST = [
+    "Hours on meter — cross-check against undercarriage/engine wear for consistency",
+    "Undercarriage: track/pad wear %, roller and sprocket condition (biggest hidden cost on trackhoes)",
+    "Hydraulics: cylinder seal leaks, pump noise under load, cycle times on boom/stick/bucket",
+    "Engine: oil analysis if available, exhaust smoke color, cold-start behavior, compression",
+    "Attachments included vs. listed separately (thumb, buckets, quick-coupler)",
+    "Title/lien status clear — GSAxcess condition code and SF-123 (or equivalent) paperwork in order",
+    "Transport cost estimate — lowboy quote for actual distance, not just purchase price",
+    "GSAxcess 1-year no-sell/no-rent restriction — confirm attorney has reviewed before bidding",
+]
+
+_TECH_ROUTING_NOTE = (
+    "Tech/server acquisitions are NEVER routed through GSAxcess — GSAxcess does not prioritize "
+    "for-profit buyers on IT equipment. Use GovDeals.com and DLA Disposition Services (dla.mil) instead."
+)
+
+EQUIPMENT_SCOUT_SERVICE_URL = os.environ.get("EQUIPMENT_SCOUT_URL", "http://100.112.169.111:8600")
+
+
+def _flywheel_math(gsaxcess_low: float, gsaxcess_high: float, day366_low: float, day366_high: float) -> dict:
+    gain_low = day366_low - gsaxcess_high
+    gain_high = day366_high - gsaxcess_low
+    roi_low = round((gain_low / gsaxcess_high) * 100, 1) if gsaxcess_high else None
+    roi_high = round((gain_high / gsaxcess_low) * 100, 1) if gsaxcess_low else None
+    return {
+        "sale_gain_range": f"${gain_low:,.0f}-${gain_high:,.0f}",
+        "roi_range_pct": f"{roi_low}%-{roi_high}%" if roi_low is not None else "n/a",
+        "note": "Gain from acquisition-to-sale only, excludes Year 1 service revenue (add separately per business model).",
+    }
+
+
+@mcp.tool(
+    name="shanebrain_equipment_scout",
+    annotations={"readOnlyHint": True, "destructiveHint": False, "idempotentHint": False, "openWorldHint": True},
+)
+def shanebrain_equipment_scout(params: EquipmentScoutInput) -> str:
+    """Heavy equipment acquisition scout for Heavy Iron Year One (GSAxcess flywheel).
+
+    Takes a mission type (fema/training/leasing/owner-op/tech), returns a prioritized
+    equipment target list with GSAxcess/GovDeals/market price benchmarks, flywheel
+    acquisition math (buy price -> Day 366 sale -> ROI), a pre-buy inspection checklist,
+    and (optionally) a live scan of current IronPlanet listings for mission-appropriate
+    equipment via the self-hosted equipment-scout service on gulfshores.
+
+    Routes tech/server acquisitions to GovDeals/DLA, never GSAxcess (GSAxcess does not
+    prioritize for-profit buyers on IT equipment) -- this rule is always enforced
+    regardless of mission_type.
+    """
+    try:
+        mission = params.mission_type
+        priorities = _MISSION_PRIORITY[mission]
+        lines = [f"## Equipment Scout — mission: `{mission}`\n"]
+
+        lines.append("### Priority targets")
+        for p in priorities:
+            lines.append(f"- {p}")
+
+        lines.append("\n### Price benchmarks (GSAxcess target vs. market vs. Day 366 sale)")
+        lines.append("| Equipment | GSAxcess Target | Market Value | Day 366 Sale |")
+        lines.append("|---|---|---|---|")
+        for name, b in _EQUIPMENT_BENCHMARKS.items():
+            lines.append(f"| {name} | {b['gsaxcess']} | {b['market']} | {b['day366_sale']} |")
+
+        if mission == "tech":
+            lines.append(f"\n**Routing rule:** {_TECH_ROUTING_NOTE}")
+        else:
+            math = _flywheel_math(25000, 45000, 75000, 105000)
+            lines.append("\n### Flywheel math (Cat 320-class reference)")
+            lines.append("- Acquire at GSAxcess target ($25K-$45K) -> work 365 days -> sell Day 366+ at $75K-$105K")
+            lines.append(f"- Sale gain range: {math['sale_gain_range']} | ROI range: {math['roi_range_pct']}")
+            lines.append(f"- {math['note']}")
+
+        lines.append("\n### Pre-buy inspection checklist")
+        for item in _INSPECTION_CHECKLIST:
+            lines.append(f"- [ ] {item}")
+
+        if params.live_scan and mission != "tech":
+            makes = params.make_filter or _MISSION_MAKE_DEFAULTS.get(mission, "")
+            category = "Tracked Excavator"
+            try:
+                resp = requests.get(
+                    f"{EQUIPMENT_SCOUT_SERVICE_URL}/scan",
+                    params={"site": "ironplanet", "category": category, "include": makes, "max": 10},
+                    timeout=45,
+                )
+                data = resp.json()
+                listings = data.get("listings", [])
+                lines.append(f"\n### Live IronPlanet scan — {category} (filtered: {makes or 'none'})")
+                if not listings:
+                    lines.append("No matching live listings found right now (or scan failed) — check manually at ironplanet.com.")
+                else:
+                    for item in listings:
+                        lines.append(
+                            f"- **{item.get('title', '?')}** — {item.get('price', '?')} — "
+                            f"{item.get('location', '?')} ({item.get('distanceMiles', '?')} mi from Hazel Green) — "
+                            f"{item.get('meterHours', '?')} hrs — {item.get('saleType', '?')} — {item.get('url', '')}"
+                        )
+                lines.append(f"\n*Live scan via gulfshores equipment-scout service, scraped {data.get('scrapedAt', 'unknown time')}.*")
+            except Exception as scan_err:
+                lines.append(f"\n### Live scan unavailable\nCould not reach equipment-scout service ({EQUIPMENT_SCOUT_SERVICE_URL}): {scan_err}")
+
+        lines.append(
+            "\n---\n**Legal/financial note:** GSAxcess 1-year no-sell/no-rent restriction and any financing/loan "
+            "decisions must be reviewed by Josh's attorney and CPA before acting — this tool does not give final advice on those."
+        )
+
+        return "\n".join(lines)
+    except Exception as e:
+        return _format_error(e, "shanebrain_equipment_scout")
+
 # ===========================================================================
 # Entry point
 # ===========================================================================
